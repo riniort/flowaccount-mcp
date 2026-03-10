@@ -30,9 +30,10 @@ export function registerPurchaseOrderTools(
       limit: z.number().optional().default(20).describe("Items per page (max 100)"),
       startDate: z.string().optional().describe("Filter start date (yyyy-MM-dd)"),
       endDate: z.string().optional().describe("Filter end date (yyyy-MM-dd)"),
+      status: z.number().optional().describe("Filter by status: 0=all, 1=awaiting, 3=approved, 5=approvedAndProcessed, 7=void"),
     },
-    async ({ page, limit, startDate, endDate }) => {
-      const params = buildDocListParams({ page, limit, startDate, endDate });
+    async ({ page, limit, startDate, endDate, status }) => {
+      const params = buildDocListParams({ page, limit, startDate, endDate, filterStatus: status });
       const result = await http.get(endpoints.purchaseOrders.list(c()), params);
       return { content: [{ type: "text" as const, text: formatListResponse(result, { fields: DOC_FIELDS, page, limit }) }] };
     }

@@ -152,6 +152,7 @@ export function buildDocListParams(opts: {
   limit: number;
   startDate?: string;
   endDate?: string;
+  filterStatus?: number;
 }): Record<string, unknown> {
   const params: Record<string, unknown> = {
     currentPage: opts.page,
@@ -159,7 +160,7 @@ export function buildDocListParams(opts: {
     sortBy: JSON.stringify([{ name: "documentSerial", sortOrder: "desc" }]),
     filter: "[]",
     filterColumnValue: "{}",
-    filterStatus: 0,
+    filterStatus: opts.filterStatus ?? 0,
     searchString: "",
     totalRecords: 0,
   };
