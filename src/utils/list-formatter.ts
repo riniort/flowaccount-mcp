@@ -117,22 +117,22 @@ export const DOC_FIELDS = [
   "status",
 ];
 
-/** Contact list fields */
+/** Contact list fields (actual API field names from ContactView) */
 export const CONTACT_FIELDS = [
-  "contactId",
-  "contactCode",
-  "contactName",
-  "contactTaxId",
-  "contactEmail",
-  "contactPhoneNumber",
+  "id",
+  "code",
+  "name",
+  "taxId",
+  "email",
+  "mobile",
   "contactGroup",
   "contactType",
 ];
 
-/** Product list fields */
+/** Product list fields (actual API field names from ProductView) */
 export const PRODUCT_FIELDS = [
-  "productId",
-  "productCode",
+  "id",
+  "code",
   "name",
   "sellPrice",
   "buyPrice",
