@@ -25,16 +25,24 @@ interface FormatOptions {
 }
 
 /**
- * Status codes from FlowAccount open-api official definitions.
- * @see https://github.com/flowaccount/open-api — ReceivableInvoiceStatus
- * Covers: quotations, tax-invoices, receipts, billing-notes, cash-invoices, purchase-orders
+ * Document status codes verified from real FlowAccount API (statusString field)
+ * and web app (advance.flowaccount.com).
+ *
+ * Note: Same code has different meanings per document type. This is a generic
+ * fallback map — the formatter prefers `statusString` from API when available.
+ *
+ * Tax Invoices:  0=draft, 1=awaiting, 3=invoiceDelivered, 5=paid, 7=void, 9=invoiceReceived
+ * Quotations:    0=draft, 1=awaiting, 3=approved, 5=approvedAndProcessed, 7=void
+ * Receipts:      0=draft, 5=paid, 7=void
+ * Expenses:      1=awaiting, 3=approved, 4=pendingPayment, 5=paid, 7=void, 9=approvedAndProcessed
  */
 export const DOCUMENT_STATUS: Record<number, string> = {
+  0: "draft",
   1: "awaiting",
   3: "approved",
-  5: "approved_and_processed",
+  5: "paid",
   7: "void",
-  9: "deleted",
+  9: "invoiceReceived",
 };
 
 /**
@@ -83,7 +91,11 @@ export function formatListResponse(raw: unknown, opts: FormatOptions): string {
     for (const f of opts.fields) {
       let val = item[f];
       if (f === "publishedOn" || f === "dueDate") val = formatDate(val);
-      if (f === "status") val = statusLabel(val, sMap);
+      if (f === "status") {
+        // Prefer statusString from API (more accurate than numeric mapping)
+        const apiStr = item["statusString"];
+        val = typeof apiStr === "string" && apiStr ? apiStr : statusLabel(val, sMap);
+      }
       if (val !== undefined && val !== null && val !== "") row[f] = val;
     }
     return row;
