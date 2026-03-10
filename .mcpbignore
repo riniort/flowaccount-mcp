@@ -1,0 +1,51 @@
+# Source files (already compiled to dist/)
+src/
+
+# TypeScript build artifacts not needed at runtime
+dist/**/*.d.ts
+dist/**/*.d.ts.map
+dist/**/*.js.map
+
+# Development files
+tsconfig.json
+.git/
+.gitignore
+
+# Dev dependencies not needed at runtime
+node_modules/tsx/
+node_modules/@types/
+node_modules/typescript/
+
+# Unnecessary docs/tests in node_modules
+node_modules/**/README.md
+node_modules/**/CHANGELOG.md
+node_modules/**/HISTORY.md
+node_modules/**/MIGRATION_GUIDE.md
+node_modules/**/LICENSE
+node_modules/**/test/
+node_modules/**/tests/
+node_modules/**/.github/
+node_modules/**/docs/
+node_modules/**/example/
+node_modules/**/examples/
+node_modules/**/bench/
+node_modules/**/*.md
+
+# Zod extra builds (keep v3 and v4 — required by @modelcontextprotocol/sdk)
+node_modules/zod/src/
+
+# Playwright test utils not needed
+node_modules/playwright/types/
+node_modules/playwright-core/types/
+
+# Other unnecessary files
+node_modules/**/.editorconfig
+node_modules/**/.eslintrc*
+node_modules/**/.prettierrc*
+node_modules/**/tsconfig.json
+node_modules/**/*.ts
+!node_modules/**/*.d.ts
+node_modules/**/*.map
+
+# Output from previous pack
+*.mcpb

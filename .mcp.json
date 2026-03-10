@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "flowaccount": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "env": {
+        "FLOWACCOUNT_CULTURE": "th"
+      }
+    }
+  }
+}
