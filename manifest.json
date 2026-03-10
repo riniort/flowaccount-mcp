@@ -84,12 +84,14 @@
     { "name": "create_purchase_order", "description": "Create a new purchase order" },
     { "name": "update_purchase_order", "description": "Update a purchase order" },
     { "name": "delete_purchase_order", "description": "Delete a purchase order" },
+    { "name": "list_expense_categories", "description": "List available expense categories for use with create_expense" },
     { "name": "list_expenses", "description": "List expense documents (ค่าใช้จ่าย)" },
     { "name": "get_expense", "description": "Get a single expense" },
     { "name": "create_expense", "description": "Create a new expense" },
     { "name": "delete_expense", "description": "Delete an expense" },
     { "name": "record_expense_payment", "description": "Record payment on an expense" },
     { "name": "record_payment", "description": "Record payment on any document type" },
+    { "name": "upload_attachment", "description": "Upload file attachment to any document type" },
     { "name": "get_business_info", "description": "Get company/business information" },
     { "name": "get_bank_accounts", "description": "List configured bank accounts" }
   ]

@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { FlowAccountHttpClient } from "../../api/http-client.js";
 import { endpoints } from "../../api/endpoints.js";
 import type { TokenManager } from "../../auth/token-manager.js";
-import { formatListResponse, DOC_FIELDS } from "../../utils/list-formatter.js";
+import { formatListResponse, DOC_FIELDS, buildDocListParams } from "../../utils/list-formatter.js";
 
 const itemSchema = z.object({
   name: z.string(),
@@ -26,17 +26,15 @@ export function registerPurchaseOrderTools(
     "list_purchase_orders",
     "List purchase order documents (ใบสั่งซื้อ)",
     {
-      offset: z.number().optional().default(0),
-      limit: z.number().optional().default(20),
-      startDate: z.string().optional(),
-      endDate: z.string().optional(),
+      page: z.number().optional().default(1).describe("Page number (default 1)"),
+      limit: z.number().optional().default(20).describe("Items per page (max 100)"),
+      startDate: z.string().optional().describe("Filter start date (yyyy-MM-dd)"),
+      endDate: z.string().optional().describe("Filter end date (yyyy-MM-dd)"),
     },
-    async ({ offset, limit, startDate, endDate }) => {
-      const params: Record<string, unknown> = { offset, limit };
-      if (startDate) params.startDate = startDate;
-      if (endDate) params.endDate = endDate;
+    async ({ page, limit, startDate, endDate }) => {
+      const params = buildDocListParams({ page, limit, startDate, endDate });
       const result = await http.get(endpoints.purchaseOrders.list(c()), params);
-      return { content: [{ type: "text" as const, text: formatListResponse(result, { fields: DOC_FIELDS, offset, limit }) }] };
+      return { content: [{ type: "text" as const, text: formatListResponse(result, { fields: DOC_FIELDS, page, limit }) }] };
     }
   );
 
@@ -71,7 +69,7 @@ export function registerPurchaseOrderTools(
 
   server.tool(
     "update_purchase_order",
-    "Update an existing purchase order (only when status is draft)",
+    "Update an existing purchase order (only when status is awaiting)",
     {
       id: z.number().describe("Purchase order record ID to update"),
       contactName: z.string().optional().describe("Supplier name"),

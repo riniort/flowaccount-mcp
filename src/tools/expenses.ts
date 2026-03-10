@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { FlowAccountHttpClient } from "../api/http-client.js";
 import { endpoints } from "../api/endpoints.js";
 import type { TokenManager } from "../auth/token-manager.js";
-import { formatListResponse, DOC_FIELDS } from "../utils/list-formatter.js";
+import { formatListResponse, DOC_FIELDS, EXPENSE_STATUS, buildDocListParams } from "../utils/list-formatter.js";
 
 // Expense items require chart-of-accounts category fields (company-specific).
 // Use list_expense_categories to discover available categories for your company.
@@ -30,7 +30,7 @@ function toProductItem(item: z.infer<typeof expenseItemSchema>) {
     expenseDescription: item.description,
     quantity: item.quantity,
     pricePerUnit: String(item.pricePerUnit),
-    total: item.quantity * item.pricePerUnit - (item.discount || 0),
+    total: (item.pricePerUnit - (item.discount || 0)) * item.quantity,
     discountPerItem: item.discount || 0,
     vatRate,
     withHeldPerItem: 0,
@@ -65,7 +65,7 @@ export function registerExpenseTools(
             productItems?: Array<Record<string, unknown>>;
           }>;
         };
-      }>(endpoints.expenses.list(c()), { offset: 0, limit: 100 });
+      }>(endpoints.expenses.list(c()), { currentPage: 1, pageSize: 100, range: 0 });
 
       const categories = new Map<number, Record<string, unknown>>();
       const list = result?.data?.list ?? [];
@@ -110,17 +110,15 @@ export function registerExpenseTools(
     "list_expenses",
     "List expense documents with optional date range",
     {
-      offset: z.number().optional().default(0).describe("Pagination offset"),
-      limit: z.number().optional().default(20).describe("Items per page"),
-      startDate: z.string().optional().describe("Start date (yyyy-MM-dd)"),
-      endDate: z.string().optional().describe("End date (yyyy-MM-dd)"),
+      page: z.number().optional().default(1).describe("Page number (default 1)"),
+      limit: z.number().optional().default(20).describe("Items per page (max 100)"),
+      startDate: z.string().optional().describe("Filter start date (yyyy-MM-dd)"),
+      endDate: z.string().optional().describe("Filter end date (yyyy-MM-dd)"),
     },
-    async ({ offset, limit, startDate, endDate }) => {
-      const params: Record<string, unknown> = { offset, limit };
-      if (startDate) params.startDate = startDate;
-      if (endDate) params.endDate = endDate;
+    async ({ page, limit, startDate, endDate }) => {
+      const params = buildDocListParams({ page, limit, startDate, endDate });
       const result = await http.get(endpoints.expenses.list(c()), params);
-      return { content: [{ type: "text" as const, text: formatListResponse(result, { fields: DOC_FIELDS, offset, limit }) }] };
+      return { content: [{ type: "text" as const, text: formatListResponse(result, { fields: DOC_FIELDS, page, limit, statusMap: EXPENSE_STATUS }) }] };
     }
   );
 
@@ -175,7 +173,7 @@ export function registerExpenseTools(
   // --- Delete expense ---
   server.tool(
     "delete_expense",
-    "Delete an expense document (only if status is awaiting/draft)",
+    "Delete an expense document (only if status is awaiting)",
     { id: z.number().describe("Expense document ID to delete") },
     async ({ id }) => {
       const result = await http.delete(endpoints.expenses.delete(c(), id));

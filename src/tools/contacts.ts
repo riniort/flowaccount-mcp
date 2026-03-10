@@ -17,14 +17,14 @@ export function registerContactTools(
     "List contacts (customers/suppliers) with optional search",
     {
       search: z.string().optional().describe("Search by name, tax ID, or code"),
-      offset: z.number().optional().default(0).describe("Pagination offset"),
+      page: z.number().optional().default(1).describe("Page number (default 1)"),
       limit: z.number().optional().default(20).describe("Items per page (max 100)"),
     },
-    async ({ search, offset, limit }) => {
-      const params: Record<string, unknown> = { offset, limit };
-      if (search) params.search = search;
+    async ({ search, page, limit }) => {
+      const params: Record<string, unknown> = { currentPage: page, pageSize: limit };
+      if (search) params.searchString = search;
       const result = await http.get(endpoints.contacts.list(c()), params);
-      return { content: [{ type: "text" as const, text: formatListResponse(result, { fields: CONTACT_FIELDS, offset, limit }) }] };
+      return { content: [{ type: "text" as const, text: formatListResponse(result, { fields: CONTACT_FIELDS, page, limit }) }] };
     }
   );
 

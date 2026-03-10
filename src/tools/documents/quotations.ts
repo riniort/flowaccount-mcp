@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { FlowAccountHttpClient } from "../../api/http-client.js";
 import { endpoints } from "../../api/endpoints.js";
 import type { TokenManager } from "../../auth/token-manager.js";
-import { formatListResponse, DOC_FIELDS } from "../../utils/list-formatter.js";
+import { formatListResponse, DOC_FIELDS, buildDocListParams } from "../../utils/list-formatter.js";
 
 const itemSchema = z.object({
   name: z.string().describe("Item/product name"),
@@ -26,17 +26,15 @@ export function registerQuotationTools(
     "list_quotations",
     "List quotation documents with optional date filtering and pagination",
     {
-      offset: z.number().optional().default(0).describe("Pagination offset"),
-      limit: z.number().optional().default(20).describe("Items per page"),
+      page: z.number().optional().default(1).describe("Page number (default 1)"),
+      limit: z.number().optional().default(20).describe("Items per page (max 100)"),
       startDate: z.string().optional().describe("Filter start date (yyyy-MM-dd)"),
       endDate: z.string().optional().describe("Filter end date (yyyy-MM-dd)"),
     },
-    async ({ offset, limit, startDate, endDate }) => {
-      const params: Record<string, unknown> = { offset, limit };
-      if (startDate) params.startDate = startDate;
-      if (endDate) params.endDate = endDate;
+    async ({ page, limit, startDate, endDate }) => {
+      const params = buildDocListParams({ page, limit, startDate, endDate });
       const result = await http.get(endpoints.quotations.list(c()), params);
-      return { content: [{ type: "text" as const, text: formatListResponse(result, { fields: DOC_FIELDS, offset, limit }) }] };
+      return { content: [{ type: "text" as const, text: formatListResponse(result, { fields: DOC_FIELDS, page, limit }) }] };
     }
   );
 
@@ -77,7 +75,7 @@ export function registerQuotationTools(
 
   server.tool(
     "update_quotation",
-    "Update an existing quotation (only when status is draft/awaiting)",
+    "Update an existing quotation (only when status is awaiting)",
     {
       id: z.number().describe("Quotation record ID to update"),
       contactName: z.string().optional().describe("Customer name"),
@@ -95,7 +93,7 @@ export function registerQuotationTools(
 
   server.tool(
     "delete_quotation",
-    "Delete a quotation (only when status is draft/awaiting)",
+    "Delete a quotation (only when status is awaiting)",
     { id: z.number().describe("Quotation record ID to delete") },
     async ({ id }) => {
       const result = await http.delete(endpoints.quotations.delete(c(), id));

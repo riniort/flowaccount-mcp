@@ -44,10 +44,11 @@ export interface Document {
 }
 
 export interface DocumentListParams {
-  offset?: number;
-  limit?: number;
+  currentPage?: number;
+  pageSize?: number;
   sortBy?: string;
   filter?: string;
+  range?: number; // 0=All, 5=Custom date range
   startDate?: string;
   endDate?: string;
 }
