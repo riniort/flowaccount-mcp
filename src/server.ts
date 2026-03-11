@@ -17,6 +17,7 @@ import { registerBillingNoteTools } from "./tools/documents/billing-notes.js";
 import { registerCashInvoiceTools } from "./tools/documents/cash-invoices.js";
 import { registerPurchaseOrderTools } from "./tools/documents/purchase-orders.js";
 import { registerAttachmentTools } from "./tools/attachments.js";
+import { registerDuplicateTools } from "./tools/duplicate.js";
 
 export async function createServer(): Promise<McpServer> {
   const config = loadConfig();
@@ -48,6 +49,7 @@ export async function createServer(): Promise<McpServer> {
   registerCashInvoiceTools(server, http, tokenManager);
   registerPurchaseOrderTools(server, http, tokenManager);
   registerAttachmentTools(server, http, tokenManager);
+  registerDuplicateTools(server, http, tokenManager);
 
   logger.info("All tools registered successfully");
 
