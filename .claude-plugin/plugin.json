@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "FlowAccount Thai accounting platform integration — manage invoices, receipts, expenses, contacts, and products via MCP tools",
   "author": {
-    "name": "todsawatt"
+    "name": "riniort"
   },
   "keywords": ["accounting", "flowaccount", "thai", "invoice", "expense", "receipt", "tax"]
 }

@@ -7,17 +7,29 @@ export class TokenManager {
   private tokenStore: TokenStore;
   private tokenData: TokenData | null = null;
   private refreshPromise: Promise<void> | null = null;
+  private initializePromise: Promise<void> | null = null;
+  private initialized = false;
+  private lastRequestAt = 0;
 
   constructor(private config: Config) {
     this.tokenStore = new TokenStore(config.tokenStorePath);
   }
 
   async initialize(): Promise<void> {
-    // Try to load existing tokens
+    if (this.initialized) return;
+    if (this.initializePromise) return this.initializePromise;
+    this.initializePromise = this.initializeInternal().finally(() => {
+      this.initializePromise = null;
+    });
+    return this.initializePromise;
+  }
+
+  private async initializeInternal(): Promise<void> {
     this.tokenData = this.tokenStore.load();
 
     if (this.tokenData && this.isValid()) {
       logger.info("Using stored tokens (valid)");
+      this.initialized = true;
       return;
     }
 
@@ -28,6 +40,7 @@ export class TokenManager {
       if (refreshed) {
         this.tokenData = refreshed;
         this.tokenStore.save(refreshed);
+        this.initialized = true;
         return;
       }
       logger.info("Silent refresh failed, need interactive login");
@@ -35,6 +48,7 @@ export class TokenManager {
 
     // Need fresh interactive authentication
     await this.interactiveLogin();
+    this.initialized = true;
   }
 
   private isValid(): boolean {
@@ -82,8 +96,20 @@ export class TokenManager {
   }
 
   async getAuthHeaders(targetBaseUrl?: string): Promise<Record<string, string>> {
+    const now = Date.now();
+    const resumedAfterIdle =
+      this.lastRequestAt > 0 && now - this.lastRequestAt >= this.config.idleRecheckMs;
+    this.lastRequestAt = now;
+
+    await this.initialize();
+    if (resumedAfterIdle) {
+      logger.info("FlowAccount activity resumed after idle; checking authentication state");
+    }
     if (!this.tokenData || !this.isValid()) {
+      logger.info("FlowAccount authentication is missing or expired; refreshing before request");
       await this.refreshOrReauthenticate();
+    } else if (resumedAfterIdle) {
+      logger.info("Stored FlowAccount token is still valid; API response will confirm the session");
     }
 
     if (!this.tokenData) {
@@ -128,5 +154,21 @@ export class TokenManager {
 
   getCulture(): string {
     return this.tokenData?.culture || this.config.culture;
+  }
+
+  getCompanySupportCode(): string {
+    return this.tokenData?.extraHeaders?.["X-Company-Id"] || "";
+  }
+
+  async switchCompany(companySupportCode: string): Promise<void> {
+    if (!/^N\d+$/.test(companySupportCode)) {
+      throw new Error("Invalid FlowAccount company support code");
+    }
+    const switchedConfig: Config = {
+      ...this.config,
+      companySupportCode,
+    };
+    this.tokenData = await authenticateWithBrowser(switchedConfig);
+    this.tokenStore.save(this.tokenData);
   }
 }

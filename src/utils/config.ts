@@ -7,6 +7,9 @@ export interface Config {
   headless: boolean;
   browserTimeout: number;
   apiBaseUrl?: string;
+  credentialTarget: string;
+  companySupportCode: string;
+  idleRecheckMs: number;
 }
 
 const VALID_CULTURE = /^[a-z]{2}(-[A-Z]{2})?$/; // e.g. "th", "en-US"
@@ -24,5 +27,13 @@ export function loadConfig(): Config {
     headless: process.env.FLOWACCOUNT_HEADLESS === "true",
     browserTimeout: parseInt(process.env.FLOWACCOUNT_BROWSER_TIMEOUT || "120000", 10),
     apiBaseUrl: process.env.FLOWACCOUNT_API_BASE_URL,
+    credentialTarget:
+      process.env.FLOWACCOUNT_CREDENTIAL_TARGET ??
+      (process.platform === "win32" ? "FlowAccountMCP" : ""),
+    companySupportCode: process.env.FLOWACCOUNT_COMPANY_SUPPORT_CODE || "",
+    idleRecheckMs: parseInt(
+      process.env.FLOWACCOUNT_IDLE_RECHECK_MS || String(15 * 60 * 1000),
+      10
+    ),
   };
 }

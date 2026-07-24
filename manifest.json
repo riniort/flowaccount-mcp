@@ -5,7 +5,7 @@
   "display_name": "FlowAccount",
   "description": "MCP server for FlowAccount Thai accounting platform - จัดการเอกสารบัญชี ใบกำกับภาษี ใบเสร็จรับเงิน ใบเสนอราคา ค่าใช้จ่าย และอื่นๆ",
   "author": {
-    "name": "Tod Sawatt"
+    "name": "riniort"
   },
   "license": "MIT",
   "server": {
@@ -39,6 +39,8 @@
     }
   },
   "tools": [
+    { "name": "get_active_company", "description": "Get the active FlowAccount company and available companies" },
+    { "name": "change_active_company", "description": "Change and verify the active FlowAccount company" },
     { "name": "list_contacts", "description": "List all contacts with optional search" },
     { "name": "get_contact", "description": "Get a single contact by ID" },
     { "name": "create_contact", "description": "Create a new contact" },
@@ -88,10 +90,13 @@
     { "name": "list_expenses", "description": "List expense documents (ค่าใช้จ่าย)" },
     { "name": "get_expense", "description": "Get a single expense" },
     { "name": "create_expense", "description": "Create a new expense" },
+    { "name": "create_expense_with_attachment", "description": "Create, verify, and attach a file to an expense atomically" },
+    { "name": "update_expense", "description": "Update an awaiting expense" },
     { "name": "delete_expense", "description": "Delete an expense" },
     { "name": "record_expense_payment", "description": "Record payment on an expense" },
     { "name": "record_payment", "description": "Record payment on any document type" },
     { "name": "upload_attachment", "description": "Upload file attachment to any document type" },
+    { "name": "duplicate_document", "description": "Duplicate a supported document with guarded expense handling" },
     { "name": "get_business_info", "description": "Get company/business information" },
     { "name": "get_bank_accounts", "description": "List configured bank accounts" }
   ]

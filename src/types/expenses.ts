@@ -19,6 +19,8 @@ export interface Expense {
   contactBranch?: string;
   publishedOn: string;
   dueDate?: string;
+  /** Source document number stored in FlowAccount's reference field */
+  reference: string;
   items: ExpenseItem[];
   subTotal?: number;
   discountPercentage?: number;

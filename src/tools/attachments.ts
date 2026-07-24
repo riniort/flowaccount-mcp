@@ -17,25 +17,34 @@ const DOCUMENT_TYPES = [
 
 type DocType = (typeof DOCUMENT_TYPES)[number];
 
+export async function uploadDocumentAttachment(
+  http: FlowAccountHttpClient,
+  culture: string,
+  docType: DocType,
+  documentId: number,
+  filePath: string
+) {
+  if (!existsSync(filePath)) {
+    throw new Error(`File not found: ${filePath}`);
+  }
+  const map = {
+    quotations: endpoints.quotations.uploadAttachment,
+    "tax-invoices": endpoints.taxInvoices.uploadAttachment,
+    receipts: endpoints.receipts.uploadAttachment,
+    "billing-notes": endpoints.billingNotes.uploadAttachment,
+    "cash-invoices": endpoints.cashInvoices.uploadAttachment,
+    "purchase-orders": endpoints.purchaseOrders.uploadAttachment,
+    expenses: endpoints.expenses.uploadAttachment,
+  } as const;
+  return http.postFile(map[docType](culture, documentId), filePath);
+}
+
 export function registerAttachmentTools(
   server: McpServer,
   http: FlowAccountHttpClient,
   tokenManager: TokenManager
 ) {
   const c = () => tokenManager.getCulture();
-
-  const getUploadEndpoint = (docType: DocType, id: number) => {
-    const map = {
-      quotations: endpoints.quotations.uploadAttachment,
-      "tax-invoices": endpoints.taxInvoices.uploadAttachment,
-      receipts: endpoints.receipts.uploadAttachment,
-      "billing-notes": endpoints.billingNotes.uploadAttachment,
-      "cash-invoices": endpoints.cashInvoices.uploadAttachment,
-      "purchase-orders": endpoints.purchaseOrders.uploadAttachment,
-      expenses: endpoints.expenses.uploadAttachment,
-    } as const;
-    return map[docType](c(), id);
-  };
 
   server.tool(
     "upload_attachment",
@@ -66,8 +75,9 @@ export function registerAttachmentTools(
         };
       }
 
-      const ep = getUploadEndpoint(documentType as DocType, documentId);
-      const result = await http.postFile(ep, filePath);
+      const result = await uploadDocumentAttachment(
+        http, c(), documentType as DocType, documentId, filePath
+      );
       return {
         content: [
           { type: "text" as const, text: JSON.stringify(result, null, 2) },

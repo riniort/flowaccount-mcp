@@ -2,6 +2,12 @@ import { chromium, type BrowserContext, type Page } from "playwright";
 import { logger } from "../utils/logger.js";
 import type { Config } from "../utils/config.js";
 import type { StoredCookie, TokenData } from "./token-store.js";
+import {
+  promptToOpenCredentialManager,
+  readWindowsCredential,
+  waitForWindowsCredential,
+} from "./windows-credential.js";
+import { readFileSync } from "node:fs";
 
 // Shared cookie domains we need to capture
 const COOKIE_URLS = [
@@ -116,17 +122,43 @@ export async function silentRefresh(
 }
 
 /**
- * Interactive browser login — opens a visible browser for the user to log in.
+ * Authenticate with a browser. When a Windows credential is available, the
+ * entire login and company-selection flow runs headless in the background.
+ * Without a stored credential, it falls back to a visible interactive browser.
  */
 export async function authenticateWithBrowser(config: Config): Promise<TokenData> {
-  logger.info("==============================================");
-  logger.info("FlowAccount MCP: กำลังเปิดบราวเซอร์สำหรับ Login");
-  logger.info("กรุณา Login เข้า FlowAccount แล้วเลือกบริษัทในบราวเซอร์");
-  logger.info("==============================================");
+  let credential = await readWindowsCredential(config.credentialTarget);
+  if (
+    !credential &&
+    process.platform === "win32" &&
+    config.credentialTarget &&
+    (await promptToOpenCredentialManager(config.credentialTarget))
+  ) {
+    logger.info(
+      `Waiting for Windows Credential "${config.credentialTarget}" to be added...`
+    );
+    credential = await waitForWindowsCredential(
+      config.credentialTarget,
+      Math.max(config.browserTimeout, 300000)
+    );
+  }
+  const backgroundLogin = Boolean(credential);
 
-  const browser = await chromium.launch({ headless: config.headless });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-  const page = await context.newPage();
+  if (backgroundLogin) {
+    logger.info("FlowAccount MCP: authenticating in background...");
+  } else {
+    logger.info("==============================================");
+    logger.info("FlowAccount MCP: กำลังเปิดบราวเซอร์สำหรับ Login");
+    logger.info("กรุณา Login เข้า FlowAccount แล้วเลือกบริษัทในบราวเซอร์");
+    logger.info("==============================================");
+  }
+
+  const browser = await chromium.launch({
+    headless: config.headless || backgroundLogin,
+  });
+  try {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const page = await context.newPage();
 
   let capturedAccessToken = "";
 
@@ -145,17 +177,47 @@ export async function authenticateWithBrowser(config: Config): Promise<TokenData
   });
 
   // Navigate to app — will redirect to login page
-  await page.goto("https://advance.flowaccount.com/", {
-    waitUntil: "domcontentloaded",
-    timeout: config.browserTimeout,
-  });
+    const authenticationTimeout = backgroundLogin
+      ? Math.min(config.browserTimeout, 45000)
+      : config.browserTimeout;
+    await page.goto("https://advance.flowaccount.com/", {
+      waitUntil: "domcontentloaded",
+      timeout: authenticationTimeout,
+    });
+
+    // advance.flowaccount.com performs a client-side redirect to the identity
+    // server. page.goto() can return before that redirect has settled, which
+    // previously made a valid stored credential get skipped entirely.
+    await page.waitForURL(
+      /auth\.flowaccount\.com\/Account\/(Login|SelectCompany)|advance\.flowaccount\.com\/N\d+\/business\//,
+      { timeout: Math.min(authenticationTimeout, 15000) }
+    ).catch(() => {});
+
+  if (credential && /auth\.flowaccount\.com/i.test(page.url())) {
+    logger.debug("Using Windows Credential Manager for automatic login");
+    await submitStoredCredential(page, credential.username, credential.password);
+    await selectCompanyIfNeeded(page, config);
+  } else if (config.credentialTarget) {
+    logger.debug("Stored credential not needed or unavailable");
+  }
 
   // Wait until user has logged in AND selected a company
-  logger.info("รอการ Login และเลือกบริษัท...");
-  await page.waitForURL(/advance\.flowaccount\.com\/N\d+\/business\//, {
-    timeout: config.browserTimeout,
-  });
-  logger.info("Login สำเร็จ! กำลังจับ session cookies...");
+  logger.debug("Waiting for login and company selection...");
+    try {
+      await page.waitForURL(/advance\.flowaccount\.com\/N\d+\/business\//, {
+        timeout: authenticationTimeout,
+      });
+    } catch (error) {
+      if (backgroundLogin) {
+        throw new Error(
+          `Background FlowAccount login did not reach a company dashboard within ${authenticationTimeout / 1000} seconds. ` +
+          `Update the Generic Credential "${config.credentialTarget}" in Windows Credential Manager, then try again.`,
+          { cause: error }
+        );
+      }
+      throw error;
+    }
+  logger.debug("Login succeeded; capturing session cookies...");
 
   // Wait a moment for initial API calls to fire
   await page.waitForTimeout(3000);
@@ -165,14 +227,93 @@ export async function authenticateWithBrowser(config: Config): Promise<TokenData
     capturedAccessToken = await extractTokenFromLocalStorage(page);
   }
 
-  const tokenData = await buildTokenData(context, page, capturedAccessToken, config);
-  await browser.close();
-  logger.info("ปิดบราวเซอร์แล้ว - MCP Server พร้อมใช้งาน");
+    if (!capturedAccessToken) {
+      throw new Error("FlowAccount login reached the dashboard but no access token was captured");
+    }
+    const tokenData = await buildTokenData(context, page, capturedAccessToken, config);
+    if (!tokenData.extraHeaders?.["X-Company-Id"]) {
+      throw new Error("FlowAccount login succeeded but the active company code was not detected");
+    }
+    logger.info("FlowAccount authentication ready");
 
-  return tokenData;
+    return tokenData;
+  } finally {
+    await browser.close().catch(() => {});
+  }
 }
 
 // --- Shared helpers ---
+
+async function submitStoredCredential(
+  page: Page,
+  username: string,
+  password: string
+): Promise<void> {
+  const usernameInput = page
+    .locator(
+      'input[type="email"], input[autocomplete="username"], input[name*="email" i], input[name*="user" i]'
+    )
+    .first();
+  await usernameInput.waitFor({ state: "visible", timeout: 15000 });
+  await usernameInput.fill(username);
+
+  let passwordInput = page
+    .locator('input[type="password"], input[autocomplete="current-password"]')
+    .first();
+  if (!(await passwordInput.isVisible().catch(() => false))) {
+    await page.locator('button[type="submit"], input[type="submit"]').first().click();
+    passwordInput = page
+      .locator('input[type="password"], input[autocomplete="current-password"]')
+      .first();
+    await passwordInput.waitFor({ state: "visible", timeout: 15000 });
+  }
+
+  await passwordInput.fill(password);
+  await page.locator('button[type="submit"], input[type="submit"]').first().click();
+  logger.debug("Submitted stored FlowAccount credential");
+}
+
+async function selectCompanyIfNeeded(page: Page, config: Config): Promise<void> {
+  await page
+    .waitForURL(
+      /auth\.flowaccount\.com\/Account\/SelectCompany|advance\.flowaccount\.com\/N\d+\/business\//,
+      { timeout: 30000 }
+    )
+    .catch(() => {});
+
+  if (!/\/Account\/SelectCompany/i.test(page.url())) return;
+
+  const supportCode =
+    config.companySupportCode || readStoredCompanySupportCode(config.tokenStorePath);
+  if (!/^N\d+$/.test(supportCode)) {
+    logger.info("กรุณาเลือกบริษัทในบราวเซอร์ (ยังไม่ได้กำหนด Company Support Code)");
+    return;
+  }
+
+  const companyLink = page
+    .locator('a[href*="/Account/SelectCompany"]')
+    .filter({ hasText: supportCode })
+    .first();
+  await companyLink.waitFor({ state: "visible", timeout: 15000 });
+  await Promise.all([
+    page.waitForURL(/advance\.flowaccount\.com\/N\d+\/business\//, {
+      timeout: Math.min(config.browserTimeout, 45000),
+    }),
+    companyLink.click(),
+  ]);
+  logger.debug(`Selected company ${supportCode}`);
+}
+
+function readStoredCompanySupportCode(tokenStorePath: string): string {
+  try {
+    const stored = JSON.parse(readFileSync(tokenStorePath, "utf8")) as {
+      extraHeaders?: Record<string, string>;
+    };
+    return stored.extraHeaders?.["X-Company-Id"] || "";
+  } catch {
+    return "";
+  }
+}
 
 async function extractTokenFromLocalStorage(page: Page): Promise<string> {
   try {
@@ -211,13 +352,13 @@ async function buildTokenData(
     expires: c.expires,
   }));
 
-  logger.info(`จับ cookies ได้ ${cookies.length} รายการ`);
+  logger.debug(`Captured ${cookies.length} cookies`);
 
   // Extract company ID from URL
   const currentUrl = page.url();
   const companyMatch = currentUrl.match(/\/(N\d+)\//);
   const companyId = companyMatch?.[1] || "";
-  logger.info(`Company ID: ${companyId}`);
+  logger.debug(`Company ID: ${companyId}`);
 
   return {
     accessToken,

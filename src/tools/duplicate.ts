@@ -3,6 +3,10 @@ import { z } from "zod";
 import type { FlowAccountHttpClient } from "../api/http-client.js";
 import { endpoints } from "../api/endpoints.js";
 import type { TokenManager } from "../auth/token-manager.js";
+import {
+  createExpenseGuarded,
+  type ExpenseCreateInput,
+} from "./expenses.js";
 
 // --- Types ---
 
@@ -109,33 +113,6 @@ function extractSalesItem(pi: Record<string, unknown>) {
   return item;
 }
 
-/** Extract expense item fields from productItems, mapping field names */
-function extractExpenseItem(pi: Record<string, unknown>) {
-  // Map vatRate back to vatType: vatRate=7 → vatType=1 (Vat), vatRate=0 → vatType=3 (NoVat)
-  const vatRate = pi.vatRate as number | undefined;
-  const vatType = vatRate === 7 ? 1 : vatRate === 0 ? 3 : (pi.vatType as number | undefined) ?? 1;
-
-  return {
-    // expenseDescription → description (what create_expense expects)
-    expenseDescription: pi.expenseDescription,
-    quantity: pi.quantity,
-    pricePerUnit: String(pi.pricePerUnit),
-    total: ((pi.pricePerUnit as number) - ((pi.discountPerItem as number) || 0)) * (pi.quantity as number),
-    discountPerItem: pi.discountPerItem || 0,
-    vatRate: vatType === 1 ? 7 : 0,
-    withHeldPerItem: 0,
-    // Chart-of-accounts fields (pass through from source)
-    expenseCategoryId: pi.expenseCategoryId,
-    expenseSystemCode: pi.expenseSystemCode,
-    expenseDebitId: pi.expenseDebitId,
-    expenseDebitCode: pi.expenseDebitCode,
-    expenseCreditId: pi.expenseCreditId,
-    expenseCreditCode: pi.expenseCreditCode,
-    expenseDebitCategory: pi.expenseDebitCategory ?? 5,
-    expenseCreditCategory: pi.expenseCreditCategory ?? 2,
-  };
-}
-
 /** Copy non-empty field from source to target */
 function copyField(source: Record<string, unknown>, target: Record<string, unknown>, field: string) {
   const val = source[field];
@@ -160,21 +137,39 @@ export function registerDuplicateTools(
 
   server.tool(
     "duplicate_document",
-    "Duplicate (สร้างซ้ำ) an existing document. Creates a new document with the same data but a new date. Supports all document types: quotations, tax-invoices, receipts, billing-notes, cash-invoices, purchase-orders, expenses.",
+    "Duplicate (สร้างซ้ำ) an existing document with a new date. Expense duplication requires a new unique reference and preserves VAT and accountant-mode account fields.",
     {
       documentType: z.enum(docTypes).describe(
         "Document type to duplicate"
       ),
       id: z.number().describe("Source document record ID to duplicate from"),
       publishedOn: z.string().optional().describe("New document date (yyyy-MM-dd). Defaults to today."),
+      reference: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe(
+          "Required for expense duplication: new source document number stored in เลขที่อ้างอิง"
+        ),
     },
-    async ({ documentType, id, publishedOn }) => {
+    async ({ documentType, id, publishedOn, reference }) => {
       const culture = c();
       const newDate = publishedOn || todayStr();
 
       // --- EXPENSE: special handling ---
       if (documentType === "expenses") {
-        return await duplicateExpense(http, culture, id, newDate);
+        if (!reference) {
+          return {
+            isError: true,
+            content: [{
+              type: "text" as const,
+              text:
+                "Expense duplication requires a new unique reference containing the source document number.",
+            }],
+          };
+        }
+        return await duplicateExpense(http, culture, id, newDate, reference);
       }
 
       // --- SALES / PURCHASE DOCUMENTS ---
@@ -247,6 +242,7 @@ async function duplicateExpense(
   culture: string,
   sourceId: number,
   newDate: string,
+  reference: string,
 ) {
   // 1. Fetch source expense
   const source = await http.get<{
@@ -257,38 +253,78 @@ async function duplicateExpense(
     return { content: [{ type: "text" as const, text: `Expense not found: #${sourceId}` }] };
   }
 
-  // 2. Build expense create body
-  const pubDate = newDate.includes("T") ? newDate : `${newDate}T00:00:00`;
-  const sourceDue = stripTime(doc.dueDate);
-  const dueDate = sourceDue ? `${sourceDue}T00:00:00` : pubDate;
-
   const sourceItems = doc.productItems as Record<string, unknown>[] | undefined;
-  const productItems = (sourceItems || []).map((item, i) => ({
-    no: i,
-    ...extractExpenseItem(item),
-  }));
+  if (!sourceItems?.length) {
+    throw new Error(`Expense #${sourceId} has no items to duplicate`);
+  }
 
-  const body: Record<string, unknown> = {
-    documentType: 13,
-    publishedOn: pubDate,
-    dueDate,
-    vatRate: 0,
-    status: 1,
-    productItems,
+  const items: ExpenseCreateInput["items"] = sourceItems.map((item, index) => {
+    const description = String(
+      item.expenseDescription ?? item.description ?? item.name ?? ""
+    ).trim();
+    const quantity = Number(item.quantity);
+    const pricePerUnit = Number(item.pricePerUnit);
+    const expenseDebitId = Number(item.expenseDebitId);
+    const expenseCreditId = Number(item.expenseCreditId);
+    const expenseDebitCode = String(item.expenseDebitCode ?? "").trim();
+    const expenseCreditCode = String(item.expenseCreditCode ?? "").trim();
+    if (
+      !description ||
+      !Number.isFinite(quantity) ||
+      !Number.isFinite(pricePerUnit) ||
+      expenseDebitId <= 0 ||
+      expenseCreditId <= 0 ||
+      !expenseDebitCode ||
+      !expenseCreditCode
+    ) {
+      throw new Error(
+        `Expense #${sourceId} item ${index + 1} is missing fields required for safe duplication`
+      );
+    }
+    return {
+      description,
+      quantity,
+      pricePerUnit,
+      discount: Number(item.discountPerItem ?? 0),
+      vatType: Number(item.vatRate) === 7 ? 1 : 3,
+      expenseDebitId,
+      expenseDebitCode,
+      expenseCreditId,
+      expenseCreditCode,
+      expenseDebitCategory: Number(item.expenseDebitCategory ?? 5),
+      expenseCreditCategory: Number(item.expenseCreditCategory ?? 2),
+    };
+  });
+
+  const contactName = String(doc.contactName ?? "").trim();
+  if (!contactName) {
+    throw new Error(`Expense #${sourceId} has no supplier name to duplicate`);
+  }
+
+  const supplierInvoice = Array.isArray(doc.supplierInvoices)
+    ? (doc.supplierInvoices[0] as Record<string, unknown> | undefined)
+    : undefined;
+  const input: ExpenseCreateInput = {
+    contactName,
+    contactTaxId: String(doc.contactTaxId ?? "").trim() || undefined,
+    contactAddress: String(doc.contactAddress ?? "").trim() || undefined,
+    publishedOn: newDate,
+    dueDate: newDate,
+    items,
+    isVatInclusive: Boolean(doc.isVatInclusive),
+    reference: reference.trim(),
+    remarks: String(doc.remarks ?? "").trim() || undefined,
+    internalNotes: String(doc.internalNotes ?? "").trim() || undefined,
+    receivedTaxInvoiceNumber:
+      items.some((item) => item.vatType === 1) ? reference.trim() : undefined,
+    receivedTaxInvoiceDate:
+      items.some((item) => item.vatType === 1) ? newDate : undefined,
+    receivedTaxForm: Number(supplierInvoice?.taxForm ?? 1),
   };
 
-  // Contact fields
-  copyField(doc, body, "contactName");
-  copyField(doc, body, "contactTaxId");
-  copyField(doc, body, "contactAddress");
-
-  // Optional fields
-  if (doc.isVatInclusive !== undefined) body.isVatInclusive = doc.isVatInclusive;
-  copyField(doc, body, "remarks");
-  copyField(doc, body, "internalNotes");
-
-  // 3. Create new expense
-  const result = await http.post(endpoints.expenses.create(culture), body);
+  // Use the same duplicate-reference guard, VAT builder, and read-back
+  // verification as create_expense.
+  const result = await createExpenseGuarded(http, culture, input);
   // Create API returns data directly (not wrapped in data.list[])
   const created = (result as Record<string, unknown>)?.data as Record<string, unknown> | undefined;
   const newSerial = created?.documentSerial || "(new)";

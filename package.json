@@ -2,6 +2,16 @@
   "name": "flowaccount-mcp",
   "version": "1.0.0",
   "description": "MCP server for FlowAccount Thai accounting platform",
+  "license": "MIT",
+  "author": "riniort and contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/riniort/flowaccount-mcp.git"
+  },
+  "homepage": "https://github.com/riniort/flowaccount-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/riniort/flowaccount-mcp/issues"
+  },
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -11,7 +21,7 @@
     "health-check": "tsx src/health-check/index.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "axios": "^1.7.9",
     "form-data": "^4.0.5",
     "playwright": "^1.50.1",
@@ -19,7 +29,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
-    "tsx": "^4.19.3",
+    "tsx": "^4.23.1",
     "typescript": "^5.7.3"
   }
 }

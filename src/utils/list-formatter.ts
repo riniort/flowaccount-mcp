@@ -108,6 +108,7 @@ export function formatListResponse(raw: unknown, opts: FormatOptions): string {
 export const DOC_FIELDS = [
   "recordId",
   "documentSerial",
+  "reference",
   "contactName",
   "publishedOn",
   "dueDate",

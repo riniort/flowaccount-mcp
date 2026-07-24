@@ -84,6 +84,8 @@ export const endpoints = {
     delete:        (c: string, id: number) => ep(BASE.CORE, `/${c}/expenses/${id}`),
     recordPayment: (c: string, id: number) => ep(BASE.CORE, `/${c}/expenses/${id}/payments`),
     uploadAttachment: (c: string, id: number) => ep(BASE.CORE, `/${c}/expenses/${id}/update-document-attachment`),
+    attachSupplierInvoice: (c: string, id: number) => ep(BASE.CORE, `/${c}/expenses/${id}/attach-invoice`),
+    updateSupplierInvoice: (c: string, id: number) => ep(BASE.CORE, `/${c}/supplier-invoice/${id}`),
   },
 
   // === CONTACTS (api-core-canary) ===
