@@ -2,11 +2,7 @@ import { chromium, type BrowserContext, type Page } from "playwright";
 import { logger } from "../utils/logger.js";
 import type { Config } from "../utils/config.js";
 import type { StoredCookie, TokenData } from "./token-store.js";
-import {
-  promptToOpenCredentialManager,
-  readWindowsCredential,
-  waitForWindowsCredential,
-} from "./windows-credential.js";
+import { readWindowsCredential } from "./windows-credential.js";
 import { readFileSync } from "node:fs";
 
 // Shared cookie domains we need to capture
@@ -124,22 +120,24 @@ export async function silentRefresh(
 /**
  * Authenticate with a browser. When a Windows credential is available, the
  * entire login and company-selection flow runs headless in the background.
- * Without a stored credential, it falls back to a visible interactive browser.
+ * When a Windows credential target is configured but missing, return
+ * actionable setup guidance to the MCP client instead of blocking on a hidden
+ * desktop prompt. Set FLOWACCOUNT_CREDENTIAL_TARGET="" to use the visible
+ * interactive-browser fallback.
  */
 export async function authenticateWithBrowser(config: Config): Promise<TokenData> {
-  let credential = await readWindowsCredential(config.credentialTarget);
+  const credential = await readWindowsCredential(config.credentialTarget);
   if (
     !credential &&
     process.platform === "win32" &&
-    config.credentialTarget &&
-    (await promptToOpenCredentialManager(config.credentialTarget))
+    config.credentialTarget
   ) {
-    logger.info(
-      `Waiting for Windows Credential "${config.credentialTarget}" to be added...`
-    );
-    credential = await waitForWindowsCredential(
-      config.credentialTarget,
-      Math.max(config.browserTimeout, 300000)
+    throw new Error(
+      `FlowAccount credential was not found in Windows Credential Manager. ` +
+      `Add a Generic Credential with Internet or network address ` +
+      `"${config.credentialTarget}", your FlowAccount login email as the user name, ` +
+      `and your FlowAccount password. Then retry get_active_company. ` +
+      `Do not send the password in chat.`
     );
   }
   const backgroundLogin = Boolean(credential);
