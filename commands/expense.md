@@ -17,6 +17,7 @@ Record an expense (ค่าใช้จ่าย) on FlowAccount by gathering i
 2. If the user provided a vendor name or description in the arguments, use that. Otherwise, ask:
    - Vendor/supplier name (ชื่อผู้จำหน่าย)
    - Vendor tax ID (เลขผู้เสียภาษี) — optional
+   - Vendor branch number (สำนักงานใหญ่/สาขา) — default `00000`; pad numeric branches to five digits, for example branch `10` becomes `00010`; treat `HQ`, `Main Branch`, and `Headquarter` as `00000`
 
 3. Ask for expense items. For each item:
    - Item name/description (รายการ)
