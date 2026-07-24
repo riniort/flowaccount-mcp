@@ -308,6 +308,8 @@ async function duplicateExpense(
     contactName,
     contactTaxId: String(doc.contactTaxId ?? "").trim() || undefined,
     contactAddress: String(doc.contactAddress ?? "").trim() || undefined,
+    contactBranch:
+      String(supplierInvoice?.contactBranch ?? doc.contactBranch ?? "").trim() || "00000",
     publishedOn: newDate,
     dueDate: newDate,
     items,

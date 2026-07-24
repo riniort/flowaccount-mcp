@@ -28,6 +28,9 @@ const expenseCreateFields = {
   contactName: z.string().describe("Supplier/vendor name"),
   contactTaxId: z.string().optional().describe("Supplier tax ID"),
   contactAddress: z.string().optional().describe("Supplier address"),
+  contactBranch: z.string().trim().min(1).optional().default("00000").describe(
+    "Supplier branch. Branch numbers are zero-padded to 5 digits (for example 10 becomes 00010); head-office labels such as HQ, main branch, and headquarter become 00000"
+  ),
   publishedOn: z.string().describe("Document date (yyyy-MM-dd)"),
   dueDate: z.string().optional().describe("Due date (yyyy-MM-dd)"),
   items: z.array(expenseItemSchema).min(1).describe("Expense line items"),
@@ -60,6 +63,21 @@ type ExpenseRecord = Record<string, unknown> & {
   supplierInvoices?: Array<Record<string, unknown>>;
   productItems?: Array<Record<string, unknown>>;
 };
+
+function normalizeContactBranch(value?: string): string {
+  const branch = (value || "00000").trim();
+  if (/^(สำนักงานใหญ่|head\s*office|main\s*branch|hq|headquarters?)$/i.test(branch)) {
+    return "00000";
+  }
+
+  const branchNumber = branch.match(/^(?:(?:สาขา|branch)\s*[:#-]?\s*)?(\d{1,5})$/i)?.[1];
+  if (!branchNumber) {
+    throw new Error(
+      'contactBranch must be a branch number from 0 to 99999 or a head-office label such as "สำนักงานใหญ่", "Head Office", "Main Branch", "HQ", or "Headquarter"'
+    );
+  }
+  return branchNumber.padStart(5, "0");
+}
 
 export async function findExpenseByExactReference(
   http: FlowAccountHttpClient,
@@ -117,10 +135,11 @@ function toProductItem(item: z.infer<typeof expenseItemSchema>) {
 
 function buildExpenseBody(input: ExpenseCreateInput) {
   const {
-    items, publishedOn, dueDate, isVatInclusive, reference,
+    items, publishedOn, dueDate, isVatInclusive, reference, contactBranch,
     receivedTaxInvoiceNumber, receivedTaxInvoiceDate, receivedTaxForm,
     ...rest
   } = input;
+  const normalizedContactBranch = normalizeContactBranch(contactBranch);
   const productItems = items.map((item, i) => ({ no: i, ...toProductItem(item) }));
   const pubDate = publishedOn.includes("T") ? publishedOn : `${publishedOn}T00:00:00`;
   const due = dueDate
@@ -142,7 +161,7 @@ function buildExpenseBody(input: ExpenseCreateInput) {
       : pubDate,
     documentSerial: (receivedTaxInvoiceNumber || reference).trim(),
     referenceDocumentType: 13,
-    contactBranch: "00000",
+    contactBranch: normalizedContactBranch,
     contactName: input.contactName,
     contactTaxId: input.contactTaxId || "",
     total,
@@ -151,7 +170,8 @@ function buildExpenseBody(input: ExpenseCreateInput) {
     taxForm: receivedTaxForm ?? 1,
   }] : [];
   return {
-    documentType: 13, ...rest, reference, publishedOn: pubDate, dueDate: due,
+    documentType: 13, ...rest, contactBranch: normalizedContactBranch,
+    reference, publishedOn: pubDate, dueDate: due,
     subTotal, totalAfterDiscount: subTotal, exemptAmount, vatableAmount, vatValue,
     totalWithoutVat: subTotal, total, vatRate: hasVat ? 7 : 0, isVat: hasVat,
     isVatInclusive: hasVat ? isVatInclusive : false, isReCalculate: true,

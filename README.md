@@ -87,6 +87,13 @@ The server sends it explicitly to FlowAccount's **เลขที่อ้าง
 verifies that the create response contains the same value. Expense list output
 also includes `reference` to support duplicate checks.
 
+Expense creation tools also expose `contactBranch` for the supplier branch
+number. It defaults to `00000` (head office), zero-pads numeric branches to
+five digits (`10` or `สาขา 10` becomes `00010`), and is sent to the received
+supplier tax-invoice record. Head-office labels such as `สำนักงานใหญ่`,
+`Head Office`, `Main Branch`, `HQ`, and `Headquarter` are normalized to
+`00000`.
+
 ### Claude Desktop Integration
 
 Add to your `claude_desktop_config.json`:
