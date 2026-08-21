@@ -4,7 +4,9 @@ import type { FlowAccountHttpClient } from "../api/http-client.js";
 import { endpoints } from "../api/endpoints.js";
 import type { TokenManager } from "../auth/token-manager.js";
 import {
+  buildExpenseBody,
   createExpenseGuarded,
+  roundMoney,
   type ExpenseCreateInput,
 } from "./expenses.js";
 
@@ -237,6 +239,113 @@ export function registerDuplicateTools(
 
 // --- Expense duplicate (separate due to different item structure) ---
 
+export function buildExpenseDuplicateInput(
+  doc: Record<string, unknown>,
+  newDate: string,
+  reference: string,
+  sourceLabel = "source expense",
+): ExpenseCreateInput {
+  const sourceItems = doc.productItems as Record<string, unknown>[] | undefined;
+  if (!sourceItems?.length) {
+    throw new Error(`${sourceLabel} has no items to duplicate`);
+  }
+
+  const items: ExpenseCreateInput["items"] = sourceItems.map((item, index) => {
+    const description = String(
+      item.expenseDescription ?? item.description ?? item.name ?? ""
+    ).trim();
+    const quantity = Number(item.quantity);
+    const pricePerUnit = Number(item.pricePerUnit);
+    const expenseDebitId = Number(item.expenseDebitId);
+    const expenseCreditId = Number(item.expenseCreditId);
+    const expenseDebitCode = String(item.expenseDebitCode ?? "").trim();
+    const expenseCreditCode = String(item.expenseCreditCode ?? "").trim();
+    if (
+      !description ||
+      !Number.isFinite(quantity) ||
+      quantity <= 0 ||
+      !Number.isFinite(pricePerUnit) ||
+      pricePerUnit < 0 ||
+      expenseDebitId <= 0 ||
+      expenseCreditId <= 0 ||
+      !expenseDebitCode ||
+      !expenseCreditCode
+    ) {
+      throw new Error(
+        `${sourceLabel} item ${index + 1} is missing fields required for safe duplication`
+      );
+    }
+    return {
+      description,
+      quantity,
+      pricePerUnit,
+      vatType: Number(item.vatRate) === 7 ? 1 : 3,
+      expenseDebitId,
+      expenseDebitCode,
+      expenseCreditId,
+      expenseCreditCode,
+      expenseDebitCategory: Number(item.expenseDebitCategory ?? 5),
+      expenseCreditCategory: Number(item.expenseCreditCategory ?? 2),
+    };
+  });
+
+  const contactName = String(doc.contactName ?? "").trim();
+  if (!contactName) {
+    throw new Error(`${sourceLabel} has no supplier name to duplicate`);
+  }
+
+  const supplierInvoice = Array.isArray(doc.supplierInvoices)
+    ? (doc.supplierInvoices[0] as Record<string, unknown> | undefined)
+    : undefined;
+  return {
+    contactName,
+    contactTaxId: String(doc.contactTaxId ?? "").trim() || undefined,
+    contactAddress: String(doc.contactAddress ?? "").trim() || undefined,
+    contactBranch:
+      String(supplierInvoice?.contactBranch ?? doc.contactBranch ?? "").trim() || "00000",
+    publishedOn: newDate,
+    dueDate: newDate,
+    items,
+    // FlowAccount exposes the authoritative overall discount on the document.
+    // Never rebuild it from discountPerItem, whose meaning varies by discount mode.
+    discount: Number(doc.discount ?? 0),
+    isVatInclusive: Boolean(doc.isVatInclusive),
+    reference: reference.trim(),
+    remarks: String(doc.remarks ?? "").trim() || undefined,
+    internalNotes: String(doc.internalNotes ?? "").trim() || undefined,
+    receivedTaxInvoiceNumber:
+      items.some((item) => item.vatType === 1) ? reference.trim() : undefined,
+    receivedTaxInvoiceDate:
+      items.some((item) => item.vatType === 1) ? newDate : undefined,
+    receivedTaxForm: Number(supplierInvoice?.taxForm ?? 1),
+  };
+}
+
+export function verifyExpenseDuplicateTotals(
+  doc: Record<string, unknown>,
+  input: ExpenseCreateInput,
+  sourceLabel = "source expense",
+): void {
+  const preview = buildExpenseBody(input);
+  const totalChecks: Array<[string, unknown, number]> = [
+    ["gross subtotal", doc.subTotal, preview.subTotal],
+    ["discount", doc.discount ?? 0, preview.discount],
+    ["total after discount", doc.totalAfterDiscount, preview.totalAfterDiscount],
+    ["VAT base", doc.vatableAmount, preview.vatableAmount],
+    ["VAT", doc.vatValue, preview.vatValue],
+    ["grand total", doc.total, preview.total],
+  ];
+  for (const [label, sourceAmount, duplicatedAmount] of totalChecks) {
+    const numericSource = Number(sourceAmount);
+    if (!Number.isFinite(numericSource) || roundMoney(numericSource) !== duplicatedAmount) {
+      throw new Error(
+        `${sourceLabel} cannot be duplicated safely: ${label} would change ` +
+        `from ${sourceAmount} to ${duplicatedAmount}`
+      );
+    }
+  }
+}
+
 async function duplicateExpense(
   http: FlowAccountHttpClient,
   culture: string,
@@ -253,76 +362,17 @@ async function duplicateExpense(
     return { content: [{ type: "text" as const, text: `Expense not found: #${sourceId}` }] };
   }
 
-  const sourceItems = doc.productItems as Record<string, unknown>[] | undefined;
-  if (!sourceItems?.length) {
-    throw new Error(`Expense #${sourceId} has no items to duplicate`);
-  }
+  const input = buildExpenseDuplicateInput(
+    doc,
+    newDate,
+    reference,
+    `Expense #${sourceId}`,
+  );
 
-  const items: ExpenseCreateInput["items"] = sourceItems.map((item, index) => {
-    const description = String(
-      item.expenseDescription ?? item.description ?? item.name ?? ""
-    ).trim();
-    const quantity = Number(item.quantity);
-    const pricePerUnit = Number(item.pricePerUnit);
-    const expenseDebitId = Number(item.expenseDebitId);
-    const expenseCreditId = Number(item.expenseCreditId);
-    const expenseDebitCode = String(item.expenseDebitCode ?? "").trim();
-    const expenseCreditCode = String(item.expenseCreditCode ?? "").trim();
-    if (
-      !description ||
-      !Number.isFinite(quantity) ||
-      !Number.isFinite(pricePerUnit) ||
-      expenseDebitId <= 0 ||
-      expenseCreditId <= 0 ||
-      !expenseDebitCode ||
-      !expenseCreditCode
-    ) {
-      throw new Error(
-        `Expense #${sourceId} item ${index + 1} is missing fields required for safe duplication`
-      );
-    }
-    return {
-      description,
-      quantity,
-      pricePerUnit,
-      discount: Number(item.discountPerItem ?? 0),
-      vatType: Number(item.vatRate) === 7 ? 1 : 3,
-      expenseDebitId,
-      expenseDebitCode,
-      expenseCreditId,
-      expenseCreditCode,
-      expenseDebitCategory: Number(item.expenseDebitCategory ?? 5),
-      expenseCreditCategory: Number(item.expenseCreditCategory ?? 2),
-    };
-  });
-
-  const contactName = String(doc.contactName ?? "").trim();
-  if (!contactName) {
-    throw new Error(`Expense #${sourceId} has no supplier name to duplicate`);
-  }
-
-  const supplierInvoice = Array.isArray(doc.supplierInvoices)
-    ? (doc.supplierInvoices[0] as Record<string, unknown> | undefined)
-    : undefined;
-  const input: ExpenseCreateInput = {
-    contactName,
-    contactTaxId: String(doc.contactTaxId ?? "").trim() || undefined,
-    contactAddress: String(doc.contactAddress ?? "").trim() || undefined,
-    contactBranch:
-      String(supplierInvoice?.contactBranch ?? doc.contactBranch ?? "").trim() || "00000",
-    publishedOn: newDate,
-    dueDate: newDate,
-    items,
-    isVatInclusive: Boolean(doc.isVatInclusive),
-    reference: reference.trim(),
-    remarks: String(doc.remarks ?? "").trim() || undefined,
-    internalNotes: String(doc.internalNotes ?? "").trim() || undefined,
-    receivedTaxInvoiceNumber:
-      items.some((item) => item.vatType === 1) ? reference.trim() : undefined,
-    receivedTaxInvoiceDate:
-      items.some((item) => item.vatType === 1) ? newDate : undefined,
-    receivedTaxForm: Number(supplierInvoice?.taxForm ?? 1),
-  };
+  // Fail before creating anything if normalization would change the source
+  // document's financial totals. This protects legacy and UI-created discounts
+  // whose per-item metadata uses different semantics.
+  verifyExpenseDuplicateTotals(doc, input, `Expense #${sourceId}`);
 
   // Use the same duplicate-reference guard, VAT builder, and read-back
   // verification as create_expense.

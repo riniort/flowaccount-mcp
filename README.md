@@ -94,6 +94,11 @@ supplier tax-invoice record. Head-office labels such as `สำนักงา�
 `Head Office`, `Main Branch`, `HQ`, and `Headquarter` are normalized to
 `00000`.
 
+Expense discounts use one absolute `discount` amount at document level. Item
+discounts are intentionally not accepted: keeping item totals gross prevents a
+discount from being multiplied by quantity and makes the VAT base auditable as
+`subTotal - discount`.
+
 ### Claude Desktop Integration
 
 Add to your `claude_desktop_config.json`:
@@ -174,6 +179,22 @@ Add to your `claude_desktop_config.json`:
 | `get_business_info` | Get company info |
 | `get_bank_accounts` | List bank accounts |
 
+## Known FlowAccount UI bugs
+
+### Received tax-invoice VAT may appear as `0.00` on an expense
+
+The expanded **received tax invoice** table on an expense, and the
+`supplierInvoices[].vatValue` field returned by the expense-detail projection,
+may show `0.00` even when FlowAccount has recorded the input VAT correctly in
+the purchase-tax summary.
+
+- Use the purchase-tax summary and the expense-level `vatableAmount`,
+  `vatValue`, and `total` as the authoritative amounts.
+- Do not delete, re-attach, or update a received tax invoice solely because the
+  expense-detail UI or projection shows VAT `0.00`.
+- The MCP intentionally verifies the received tax-invoice identity from the
+  expense detail without treating its projected `vatValue` as authoritative.
+
 ## Project Structure
 
 ```
@@ -214,6 +235,7 @@ src/
 ```bash
 npm run dev    # Run with tsx (auto-reload)
 npm run build  # Compile TypeScript
+npm test       # Build and run the offline calculation tests
 npm start      # Run compiled version
 ```
 

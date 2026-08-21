@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Decimal } from "decimal.js";
 import { z } from "zod";
 import type { FlowAccountHttpClient } from "../api/http-client.js";
 import { endpoints } from "../api/endpoints.js";
@@ -10,10 +11,10 @@ import { uploadDocumentAttachment } from "./attachments.js";
 // Use list_expense_categories to discover available categories for your company.
 const expenseItemSchema = z.object({
   description: z.string().describe("Item description"),
-  quantity: z.number().describe("Quantity"),
-  pricePerUnit: z.number().describe("Price per unit"),
-  discount: z.number().optional().describe("Discount amount"),
-  vatType: z.number().optional().default(1).describe("1=Vat, 2=VatExempt, 3=NoVat"),
+  quantity: z.number().positive().describe("Quantity (must be greater than zero)"),
+  pricePerUnit: z.number().nonnegative().describe("Price per unit (cannot be negative)"),
+  vatType: z.union([z.literal(1), z.literal(2), z.literal(3)])
+    .optional().default(1).describe("1=Vat, 2=VatExempt, 3=NoVat"),
   // Accountant-category mode is mandatory. Business-category IDs are not
   // exposed because accepting them would allow a document to use the wrong UI mode.
   expenseDebitId: z.number().positive().describe("Required debit chart-of-account ID in accountant-category mode"),
@@ -34,6 +35,9 @@ const expenseCreateFields = {
   publishedOn: z.string().describe("Document date (yyyy-MM-dd)"),
   dueDate: z.string().optional().describe("Due date (yyyy-MM-dd)"),
   items: z.array(expenseItemSchema).min(1).describe("Expense line items"),
+  discount: z.number().nonnegative().multipleOf(0.01).optional().default(0).describe(
+    "Absolute discount amount for the whole expense document. VAT is calculated after this discount."
+  ),
   isVatInclusive: z.boolean().optional().default(true).describe("Prices include VAT?"),
   reference: z.string().trim().min(1).describe(
     "Required source document number; stored in FlowAccount field เลขที่อ้างอิง (reference)"
@@ -51,7 +55,7 @@ const expenseCreateFields = {
   ),
 };
 
-const expenseCreateSchema = z.object(expenseCreateFields);
+export const expenseCreateSchema = z.object(expenseCreateFields);
 export type ExpenseCreateInput = z.infer<typeof expenseCreateSchema>;
 const referencesInFlight = new Set<string>();
 
@@ -77,6 +81,27 @@ function normalizeContactBranch(value?: string): string {
     );
   }
   return branchNumber.padStart(5, "0");
+}
+
+/** Decimal half-up helpers: never perform money arithmetic with binary floats. */
+export function roundMoney(value: Decimal.Value): number {
+  return new Decimal(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
+}
+
+function sumMoney(values: Decimal.Value[]): number {
+  return roundMoney(values.reduce<Decimal>((sum, value) => sum.plus(value), new Decimal(0)));
+}
+
+function subtractMoney(left: Decimal.Value, right: Decimal.Value): number {
+  return roundMoney(new Decimal(left).minus(right));
+}
+
+function multiplyMoney(left: Decimal.Value, right: Decimal.Value): number {
+  return roundMoney(new Decimal(left).times(right));
+}
+
+function divideMoney(left: Decimal.Value, right: Decimal.Value): number {
+  return roundMoney(new Decimal(left).dividedBy(right));
 }
 
 export async function findExpenseByExactReference(
@@ -112,12 +137,17 @@ export async function findExpenseByExactReference(
 
 function toProductItem(item: z.infer<typeof expenseItemSchema>) {
   const vatRate = item.vatType === 1 ? 7 : 0;
+  const grossTotal = multiplyMoney(item.pricePerUnit, item.quantity);
   return {
     expenseDescription: item.description,
     quantity: item.quantity,
     pricePerUnit: String(item.pricePerUnit),
-    total: (item.pricePerUnit - (item.discount || 0)) * item.quantity,
-    discountPerItem: item.discount || 0,
+    // Keep every item gross. Expense discounts are controlled only by the
+    // document-level discount so quantity cannot accidentally multiply them.
+    total: grossTotal,
+    discountPerItem: 0,
+    discountPerItemValue: 0,
+    productDiscountTypes: 0,
     vatRate,
     withHeldPerItem: 0,
     // The user's FlowAccount workflow uses the accountant category selector,
@@ -133,9 +163,10 @@ function toProductItem(item: z.infer<typeof expenseItemSchema>) {
   };
 }
 
-function buildExpenseBody(input: ExpenseCreateInput) {
+export function buildExpenseBody(input: ExpenseCreateInput) {
   const {
-    items, publishedOn, dueDate, isVatInclusive, reference, contactBranch,
+    items, discount: inputDiscount, publishedOn, dueDate, isVatInclusive,
+    reference, contactBranch,
     receivedTaxInvoiceNumber, receivedTaxInvoiceDate, receivedTaxForm,
     ...rest
   } = input;
@@ -145,15 +176,39 @@ function buildExpenseBody(input: ExpenseCreateInput) {
   const due = dueDate
     ? (dueDate.includes("T") ? dueDate : `${dueDate}T00:00:00`)
     : pubDate;
-  const subTotal = productItems.reduce((sum, item) => sum + item.total, 0);
-  const exemptAmount = items.reduce(
-    (sum, item, i) => item.vatType === 1 ? sum : sum + productItems[i].total,
-    0
+  const lineAmounts = items.map((item, index) => ({
+    gross: productItems[index].total,
+    isVat: item.vatType === 1,
+  }));
+  const subTotal = sumMoney(lineAmounts.map((item) => item.gross));
+  const discount = roundMoney(inputDiscount ?? 0);
+  if (discount > subTotal) {
+    throw new Error(
+      `Expense document discount (${discount}) cannot exceed its gross subtotal (${subTotal})`
+    );
+  }
+  const totalAfterDiscount = subtractMoney(subTotal, discount);
+  const taxableGross = sumMoney(
+    lineAmounts.filter((item) => item.isVat).map((item) => item.gross)
   );
-  const vatGross = subTotal - exemptAmount;
-  const vatableAmount = isVatInclusive ? vatGross / 1.07 : vatGross;
-  const vatValue = vatGross - vatableAmount + (isVatInclusive ? 0 : vatableAmount * 0.07);
-  const total = exemptAmount + vatableAmount + vatValue;
+  const exemptGross = sumMoney(
+    lineAmounts.filter((item) => !item.isVat).map((item) => item.gross)
+  );
+  // FlowAccount's overall discount applies to the whole document. Allocate it
+  // proportionally only for VAT-base calculation; keep the remainder on the
+  // exempt side so the two-decimal checksum always balances.
+  const taxableDiscount = subTotal > 0
+    ? divideMoney(new Decimal(discount).times(taxableGross), subTotal)
+    : 0;
+  const exemptDiscount = subtractMoney(discount, taxableDiscount);
+  const vatGross = subtractMoney(taxableGross, taxableDiscount);
+  const exemptAmount = subtractMoney(exemptGross, exemptDiscount);
+  const vatableAmount = isVatInclusive ? divideMoney(vatGross, 1.07) : vatGross;
+  const vatValue = isVatInclusive
+    ? subtractMoney(vatGross, vatableAmount)
+    : multiplyMoney(vatableAmount, 0.07);
+  const totalWithoutVat = sumMoney([exemptAmount, vatableAmount]);
+  const total = sumMoney([totalWithoutVat, vatValue]);
   const hasVat = vatGross > 0;
   const supplierInvoices = hasVat ? [{
     documentDate: receivedTaxInvoiceDate
@@ -172,10 +227,18 @@ function buildExpenseBody(input: ExpenseCreateInput) {
   return {
     documentType: 13, ...rest, contactBranch: normalizedContactBranch,
     reference, publishedOn: pubDate, dueDate: due,
-    subTotal, totalAfterDiscount: subTotal, exemptAmount, vatableAmount, vatValue,
-    totalWithoutVat: subTotal, total, vatRate: hasVat ? 7 : 0, isVat: hasVat,
+    subTotal, totalAfterDiscount, exemptAmount, vatableAmount, vatValue,
+    totalWithoutVat, total, vatRate: hasVat ? 7 : 0, isVat: hasVat,
     isVatInclusive: hasVat ? isVatInclusive : false, isReCalculate: true,
-    documentDiscountTypes: 1, discount: 0, withholdingTaxAmount: 0, withHeld: 0,
+    // Type 3 is an absolute document discount in FlowAccount. We keep inline
+    // discount disabled so item totals remain gross and VAT is calculated from
+    // totalAfterDiscount, matching the expense UI and received tax invoice.
+    documentDiscountTypes: discount > 0 ? 3 : 1,
+    discount,
+    discountPercentage: 0,
+    isDicountAsPercentage: false,
+    useInlineDiscount: false,
+    withholdingTaxAmount: 0, withHeld: 0,
     expenseCategoryViewType: 1, status: 1, productItems, supplierInvoices,
   };
 }
@@ -242,8 +305,8 @@ export async function createExpenseGuarded(
             { ...supplierInvoice, referenceDocumentId: recordId }
           );
           if (
-            Math.abs(Number(attached?.data?.total) - Number(expectedBody.vatableAmount)) > 0.01 ||
-            Math.abs(Number(attached?.data?.vatValue) - Number(expectedBody.vatValue)) > 0.01
+            roundMoney(Number(attached?.data?.total)) !== expectedBody.vatableAmount ||
+            roundMoney(Number(attached?.data?.vatValue)) !== expectedBody.vatValue
           ) {
             throw new Error(
               `Received tax-invoice attachment verification failed for expense ${recordId}: ` +
@@ -306,10 +369,56 @@ async function getAndVerifyExpense(
         `Created expense ${recordId} item ${index + 1} failed accountant-category account-code verification`
       );
     }
+
+    const expectedGross = expected.pricePerUnit * expected.quantity;
+    const savedGross = Number(saved?.total);
+    if (!Number.isFinite(savedGross) || Math.abs(savedGross - expectedGross) > 0.01) {
+      throw new Error(
+        `Created expense ${recordId} item ${index + 1} has an incorrect gross total: ` +
+        `expected ${expectedGross}, got ${saved?.total}`
+      );
+    }
+    const savedDiscount = Number(saved?.discountPerItem ?? 0);
+    if (!Number.isFinite(savedDiscount) || roundMoney(savedDiscount) !== 0) {
+      throw new Error(
+        `Created expense ${recordId} item ${index + 1} has an incorrect discount: ` +
+        `expected 0 because expense discounts are document-level, got ${saved?.discountPerItem}`
+      );
+    }
   });
   const expectedBody = buildExpenseBody(input);
+  const amountChecks: Array<[string, unknown, number]> = [
+    ["gross subtotal", expense.subTotal, expectedBody.subTotal],
+    ["discount", expense.discount, expectedBody.discount],
+    ["total after discount", expense.totalAfterDiscount, expectedBody.totalAfterDiscount],
+    ["VAT base", expense.vatableAmount, expectedBody.vatableAmount],
+    ["VAT", expense.vatValue, expectedBody.vatValue],
+    ["grand total", expense.total, expectedBody.total],
+  ];
+  for (const [label, actual, expected] of amountChecks) {
+    const savedAmount = Number(actual);
+    if (!Number.isFinite(savedAmount) || roundMoney(savedAmount) !== expected) {
+      throw new Error(
+        `Created expense ${recordId} has an incorrect ${label}: expected ${expected}, got ${actual}`
+      );
+    }
+  }
+  const savedVatBase = roundMoney(Number(expense.vatableAmount));
+  const savedVat = roundMoney(Number(expense.vatValue));
+  const savedExempt = roundMoney(Number(expense.exemptAmount ?? 0));
+  const savedGrandTotal = roundMoney(Number(expense.total));
+  if (sumMoney([savedVatBase, savedVat, savedExempt]) !== savedGrandTotal) {
+    throw new Error(
+      `Created expense ${recordId} failed the two-decimal checksum: ` +
+      `${savedVatBase} + ${savedVat} + ${savedExempt} != ${savedGrandTotal}`
+    );
+  }
   if (Number(expectedBody.vatValue) > 0) {
     const expectedNumber = (input.receivedTaxInvoiceNumber || input.reference).trim();
+    // Expense detail can expose supplierInvoices[].vatValue as 0 even when the
+    // authoritative purchase-tax summary contains the correct VAT. Verify the
+    // received invoice identity here; do not treat that projection as a VAT
+    // amount check or attempt a destructive re-attachment.
     const supplierInvoice = expense.supplierInvoices?.find(
       (item) => String(item.documentSerial ?? "").trim() === expectedNumber
     );
