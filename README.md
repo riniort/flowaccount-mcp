@@ -7,6 +7,8 @@ MCP (Model Context Protocol) server for [FlowAccount](https://flowaccount.com) â
 > endorsed by FlowAccount. It uses endpoints observed from the FlowAccount web
 > application, which may change without notice.
 
+See [CHANGELOG.md](CHANGELOG.md) for release history and notable changes.
+
 ## Features
 
 ### Documents (7 types)
