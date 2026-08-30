@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-08-30
+
+### Fixed
+
+- Missing Windows credentials now trigger a visible setup notice that can open
+  Credential Manager, show the exact Generic Credential fields, and wait for
+  the credential before continuing authentication.
+- Declining the prompt or reaching the timeout returns actionable setup
+  guidance to the MCP client instead of failing silently.
+- Added offline tests for existing credentials, open-and-wait, decline,
+  timeout, and explicit interactive-login fallback paths.
+
 ## [1.3.1] - 2026-08-30
 
 ### Documentation

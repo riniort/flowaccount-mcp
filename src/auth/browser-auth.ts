@@ -2,7 +2,12 @@ import { chromium, type BrowserContext, type Page } from "playwright";
 import { logger } from "../utils/logger.js";
 import type { Config } from "../utils/config.js";
 import type { StoredCookie, TokenData } from "./token-store.js";
-import { readWindowsCredential } from "./windows-credential.js";
+import {
+  promptToOpenCredentialManager,
+  readWindowsCredential,
+  waitForWindowsCredential,
+  type LoginCredential,
+} from "./windows-credential.js";
 import { readFileSync } from "node:fs";
 
 // Shared cookie domains we need to capture
@@ -120,26 +125,16 @@ export async function silentRefresh(
 /**
  * Authenticate with a browser. When a Windows credential is available, the
  * entire login and company-selection flow runs headless in the background.
- * When a Windows credential target is configured but missing, return
- * actionable setup guidance to the MCP client instead of blocking on a hidden
- * desktop prompt. Set FLOWACCOUNT_CREDENTIAL_TARGET="" to use the visible
- * interactive-browser fallback.
+ * When a Windows credential target is configured but missing, notify the user,
+ * offer to open Credential Manager, and wait for the requested credential.
+ * Set FLOWACCOUNT_CREDENTIAL_TARGET="" to use the visible interactive-browser
+ * fallback instead.
  */
 export async function authenticateWithBrowser(config: Config): Promise<TokenData> {
-  const credential = await readWindowsCredential(config.credentialTarget);
-  if (
-    !credential &&
-    process.platform === "win32" &&
-    config.credentialTarget
-  ) {
-    throw new Error(
-      `FlowAccount credential was not found in Windows Credential Manager. ` +
-      `Add a Generic Credential with Internet or network address ` +
-      `"${config.credentialTarget}", your FlowAccount login email as the user name, ` +
-      `and your FlowAccount password. Then retry get_active_company. ` +
-      `Do not send the password in chat.`
-    );
-  }
+  const credential = await obtainLoginCredential(
+    config.credentialTarget,
+    config.browserTimeout
+  );
   const backgroundLogin = Boolean(credential);
 
   if (backgroundLogin) {
@@ -238,6 +233,44 @@ export async function authenticateWithBrowser(config: Config): Promise<TokenData
   } finally {
     await browser.close().catch(() => {});
   }
+}
+
+type CredentialFlowDependencies = {
+  platform?: NodeJS.Platform;
+  read?: (target: string) => Promise<LoginCredential | null>;
+  prompt?: (target: string) => Promise<boolean>;
+  wait?: (target: string, timeoutMs: number) => Promise<LoginCredential | null>;
+};
+
+export async function obtainLoginCredential(
+  target: string,
+  timeoutMs: number,
+  dependencies: CredentialFlowDependencies = {}
+): Promise<LoginCredential | null> {
+  const platform = dependencies.platform ?? process.platform;
+  const read = dependencies.read ?? readWindowsCredential;
+  const prompt = dependencies.prompt ?? promptToOpenCredentialManager;
+  const wait = dependencies.wait ?? waitForWindowsCredential;
+  const existing = await read(target);
+  if (existing || platform !== "win32" || !target) return existing;
+
+  logger.info(`FlowAccount credential "${target}" was not found; notifying the user`);
+  const opened = await prompt(target);
+  if (opened) {
+    logger.info(`Waiting for Generic Credential "${target}" to be added...`);
+    const added = await wait(target, timeoutMs);
+    if (added) return added;
+  }
+
+  const outcome = opened
+    ? `Credential Manager was opened, but "${target}" was not added within ${Math.ceil(timeoutMs / 1000)} seconds.`
+    : "Credential Manager was not opened.";
+  throw new Error(
+    `FlowAccount credential was not found in Windows Credential Manager. ${outcome} ` +
+    `Add a Generic Credential with Internet or network address "${target}", ` +
+    `your FlowAccount login email as the user name, and your FlowAccount password. ` +
+    `Then retry get_active_company. Do not send the password in chat.`
+  );
 }
 
 // --- Shared helpers ---

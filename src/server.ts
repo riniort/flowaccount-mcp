@@ -95,7 +95,7 @@ export async function createServer(): Promise<McpServer> {
   const server = new McpServer(
     {
       name: "flowaccount",
-      version: "1.3.1",
+      version: "1.3.2",
     },
     {
       instructions:

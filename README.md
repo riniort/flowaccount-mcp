@@ -93,9 +93,11 @@ Tokens are saved to `~/.flowaccount-mcp/tokens.json` and reused across sessions.
 | `FLOWACCOUNT_CHART_CACHE_PATH` | OS application-data directory | SQLite chart-of-accounts cache path |
 | `FLOWACCOUNT_CHART_CACHE_TTL_MS` | `86400000` | Chart cache TTL in milliseconds (24 hours) |
 
-On Windows, if the configured Generic Credential is missing, the MCP stops
-before login and returns setup guidance. Add the credential as described above,
-then retry `get_active_company`.
+On Windows, if the configured Generic Credential is missing, the MCP displays a
+setup notice. Choosing **Yes** opens Credential Manager and the MCP waits for
+the credential to be added before continuing automatically. Choosing **No** or
+letting the setup time out returns the same actionable field-by-field guidance
+to the MCP client; after adding the credential, retry `get_active_company`.
 
 Authentication is lazy: starting or discovering the MCP does not open a browser
 or read credentials. Clients should call `get_active_company` before the first

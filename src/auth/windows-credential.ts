@@ -59,7 +59,15 @@ $Target = $env:FLOWACCOUNT_CRED_TARGET_READ
 Add-Type -AssemblyName PresentationFramework
 $message = "ไม่พบข้อมูล FlowAccount ใน Windows Credential Manager." +
   [Environment]::NewLine + [Environment]::NewLine +
-  "ต้องการเปิด Credential Manager เพื่อเพิ่ม Generic Credential ชื่อ '$Target' หรือไม่?"
+  "ต้องการเปิด Credential Manager เพื่อเพิ่ม Generic Credential หรือไม่?" +
+  [Environment]::NewLine + [Environment]::NewLine +
+  "เมื่อเปิดแล้ว เลือก Windows Credentials > Add a generic credential" +
+  [Environment]::NewLine +
+  "Internet or network address: $Target" +
+  [Environment]::NewLine +
+  "User name: อีเมลที่ใช้เข้า FlowAccount" +
+  [Environment]::NewLine +
+  "Password: รหัสผ่าน FlowAccount"
 $title = "FlowAccount MCP"
 $answer = [System.Windows.MessageBox]::Show(
   $message,
