@@ -36,7 +36,7 @@ See [CHANGELOG.md](CHANGELOG.md) for release history and notable changes.
 ## Setup
 
 ### Prerequisites
-- Node.js 18+
+- Node.js 22.5+
 - A FlowAccount account (paid subscription)
 
 ### Install
@@ -50,7 +50,32 @@ npm run build
 
 ### Authentication
 
-On first run, the server opens a Playwright browser to FlowAccount's login page. Sign in with your credentials — the server captures and stores auth tokens automatically.
+Authentication is lazy and begins when the client first calls
+`get_active_company`. On Windows, the default configuration expects a Generic
+Credential named `FlowAccountMCP` so the MCP can reauthenticate in a background
+browser without putting a password in a config file or chat.
+
+#### Windows Credential Manager setup (recommended)
+
+1. Open **Control Panel → Credential Manager → Windows Credentials**.
+2. Select **Add a generic credential**.
+3. Enter these values:
+   - **Internet or network address:** `FlowAccountMCP`
+   - **User name:** your FlowAccount login email
+   - **Password:** your FlowAccount password
+4. Save it, start/restart the MCP, and call `get_active_company`.
+5. Verify the returned company code and full company name before creating or
+   modifying accounting documents.
+
+The credential name must exactly match `FLOWACCOUNT_CREDENTIAL_TARGET`. For
+example, if the environment variable is `MyFlowAccountLogin`, use that exact
+text as the Internet or network address in Credential Manager. Never put the
+password in `.env`, MCP JSON/TOML configuration, source code, an issue, or chat.
+
+To disable stored-credential login, set `FLOWACCOUNT_CREDENTIAL_TARGET` to an
+empty string and keep `FLOWACCOUNT_HEADLESS=false`. The MCP then opens a visible
+Playwright browser for interactive login. This is also the fallback for
+non-Windows systems and accounts whose MFA cannot complete in background mode.
 
 Tokens are saved to `~/.flowaccount-mcp/tokens.json` and reused across sessions. When expired, the server re-authenticates automatically.
 
@@ -68,9 +93,9 @@ Tokens are saved to `~/.flowaccount-mcp/tokens.json` and reused across sessions.
 | `FLOWACCOUNT_CHART_CACHE_PATH` | OS application-data directory | SQLite chart-of-accounts cache path |
 | `FLOWACCOUNT_CHART_CACHE_TTL_MS` | `86400000` | Chart cache TTL in milliseconds (24 hours) |
 
-On Windows, if the configured Generic Credential is missing, the MCP asks
-whether to open Credential Manager. Choosing **Yes** opens it and the MCP waits
-for the credential to be added before continuing authentication.
+On Windows, if the configured Generic Credential is missing, the MCP stops
+before login and returns setup guidance. Add the credential as described above,
+then retry `get_active_company`.
 
 Authentication is lazy: starting or discovering the MCP does not open a browser
 or read credentials. Clients should call `get_active_company` before the first

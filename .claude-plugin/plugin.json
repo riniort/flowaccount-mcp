@@ -1,6 +1,6 @@
 {
   "name": "flowaccount",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "FlowAccount Thai accounting platform integration — manage invoices, receipts, expenses, contacts, and products via MCP tools",
   "author": {
     "name": "riniort"
