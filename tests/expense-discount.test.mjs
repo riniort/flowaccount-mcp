@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildExpenseBody, expenseCreateSchema } from "../dist/tools/expenses.js";
+import {
+  attachPp36SupplierInvoice,
+  buildAiSubscriptionExpenseInput,
+  buildExpenseBody,
+  buildPp36SupplierInvoice,
+  expenseCreateSchema,
+  rollbackExpenseAndVerify,
+} from "../dist/tools/expenses.js";
 import {
   buildExpenseDuplicateInput,
   verifyExpenseDuplicateTotals,
@@ -150,8 +157,223 @@ test("uses the no-discount document mode and constructs received VAT data", () =
   assert.equal(body.documentDiscountTypes, 1);
   assert.equal(body.discount, 0);
   assert.equal(body.supplierInvoices.length, 1);
-  assert.equal(body.supplierInvoices[0].total, 107);
+  assert.equal(body.supplierInvoices[0].total, 100);
   assert.equal(body.supplierInvoices[0].vatValue, 7);
+});
+
+test("builds an OpenAI expense at VAT 0 and a separate PP.36 tax record", () => {
+  const subscription = {
+    provider: "openai",
+    invoiceNumber: "2DFD044C-0014",
+    receiptNumber: "2897-5969-7339",
+    paidOn: "2026-02-07",
+    subscriptionStart: "2026-02-07",
+    subscriptionEnd: "2026-03-07",
+    amountUsd: 20,
+    amountThb: 634.30,
+    conversionSource: "bot_reference_rate",
+    sellerHasNoThaiPermanentEstablishment: true,
+    exchangeRate: 31.715,
+    exchangeRateDate: "2026-02-06",
+    paymentCardLast4: "8112",
+    expenseDebitCode: "53113",
+    expenseCreditCode: "21379.01",
+  };
+  const input = buildAiSubscriptionExpenseInput(subscription);
+  const body = buildExpenseBody({
+    ...input,
+    items: input.items.map((item) => ({
+      ...item,
+      expenseDebitId: accounts.expenseDebitId,
+      expenseDebitCategory: 5,
+      expenseCreditId: accounts.expenseCreditId,
+      expenseCreditCategory: 2,
+    })),
+  });
+
+  assert.equal(input.contactName, "OpenAI OpCo, LLC");
+  assert.equal(input.contactTaxId, "0993000528824");
+  assert.equal(input.reference, "2897-5969-7339");
+  assert.equal(input.items[0].expenseDebitCode, "53113");
+  assert.equal(input.items[0].expenseCreditCode, "21379.01");
+  assert.equal(input.items[0].vatType, 3);
+  assert.equal(body.exemptAmount, 634.30);
+  assert.equal(body.vatableAmount, 0);
+  assert.equal(body.vatValue, 0);
+  assert.equal(body.total, 634.30);
+  assert.deepEqual(body.supplierInvoices, []);
+  const pp36 = buildPp36SupplierInvoice(subscription, 59863734);
+  assert.equal(pp36.referenceDocumentId, 59863734);
+  assert.equal(pp36.total, 634.30);
+  assert.equal(pp36.vatValue, 44.40);
+  assert.equal(pp36.taxForm, 3);
+  assert.match(input.remarks, /PP\.36 due 2026-03-07/);
+});
+
+test("attaches and verifies PP.36 independently from the base-only expense", async () => {
+  const subscription = {
+    provider: "openai",
+    invoiceNumber: "2DFD044C-0014",
+    receiptNumber: "2897-5969-7339",
+    paidOn: "2026-02-07",
+    subscriptionStart: "2026-02-07",
+    subscriptionEnd: "2026-03-07",
+    amountUsd: 20,
+    amountThb: 634.30,
+    conversionSource: "card_statement",
+    sellerHasNoThaiPermanentEstablishment: true,
+    expenseDebitCode: "53113",
+    expenseCreditCode: "21379.01",
+  };
+  let posted;
+  const http = {
+    async post(path, body) {
+      posted = { path, body };
+      return { data: { ...body } };
+    },
+  };
+  await attachPp36SupplierInvoice(http, "th", 123, subscription);
+  assert.match(posted.path.path, /\/th\/expenses\/123\/attach-invoice$/);
+  assert.equal(posted.body.total, 634.30);
+  assert.equal(posted.body.vatValue, 44.40);
+  assert.equal(posted.body.taxForm, 3);
+});
+
+test("rejects a mismatched PP.36 response", async () => {
+  const subscription = {
+    provider: "anthropic",
+    invoiceNumber: "INV-1",
+    receiptNumber: "REC-1",
+    paidOn: "2026-07-08",
+    subscriptionStart: "2026-07-08",
+    subscriptionEnd: "2026-08-08",
+    amountUsd: 20,
+    amountThb: 671.25,
+    conversionSource: "card_statement",
+    sellerHasNoThaiPermanentEstablishment: true,
+    expenseDebitCode: "53113",
+    expenseCreditCode: "21379.01",
+  };
+  const http = { async post() { return { data: { total: 718.24, vatValue: 46.99, documentSerial: "INV-1", taxForm: 3 } }; } };
+  await assert.rejects(
+    attachPp36SupplierInvoice(http, "th", 123, subscription),
+    /PP\.36 attachment verification failed/
+  );
+});
+
+test("rollback verifies a successful delete instead of trusting HTTP 200", async () => {
+  const http = {
+    async delete() { return { status: true }; },
+    async get() { return { data: { list: [{ recordId: 123, status: 1, isDelete: false }] } }; },
+  };
+  await assert.rejects(
+    rollbackExpenseAndVerify(http, "th", 123),
+    /still exists/
+  );
+});
+
+test("builds an Anthropic subscription from the actual card-statement amount", () => {
+  const input = buildAiSubscriptionExpenseInput({
+    provider: "anthropic",
+    invoiceNumber: "JGHFXMVI-0003",
+    receiptNumber: "2652-3792-8777",
+    paidOn: "2026-07-08",
+    subscriptionStart: "2026-07-08",
+    subscriptionEnd: "2026-08-08",
+    amountUsd: 20,
+    amountThb: 671.25,
+    conversionSource: "card_statement",
+    sellerHasNoThaiPermanentEstablishment: true,
+    paymentCardLast4: "8112",
+    expenseDebitCode: "53113",
+    expenseCreditCode: "21379.01",
+  });
+
+  assert.equal(input.contactName, "Anthropic, PBC");
+  assert.equal(input.contactTaxId, "0993000497902");
+  assert.equal(input.items[0].pricePerUnit, 671.25);
+  assert.match(input.remarks, /actual card-statement amount/);
+  assert.match(input.remarks, /PP\.36 due 2026-08-07/);
+});
+
+test("supports another foreign AI provider using exact invoice legal details", () => {
+  const subscription = {
+    provider: "other",
+    providerName: "Example Foreign AI Co., Ltd.",
+    providerAddress: "1 Example Road, Singapore",
+    providerTaxId: "FOREIGN-TAX-123",
+    serviceName: "Qwen API Subscription",
+    invoiceNumber: "QWEN-INV-001",
+    receiptNumber: "QWEN-REC-001",
+    paidOn: "2026-08-15",
+    subscriptionStart: "2026-08-15",
+    subscriptionEnd: "2026-09-15",
+    amountUsd: 10,
+    amountThb: 330,
+    conversionSource: "card_statement",
+    sellerHasNoThaiPermanentEstablishment: true,
+    expenseDebitCode: "53113",
+    expenseCreditCode: "21379.01",
+  };
+  const input = buildAiSubscriptionExpenseInput(subscription);
+  const pp36 = buildPp36SupplierInvoice(subscription, 456);
+
+  assert.equal(input.contactName, "Example Foreign AI Co., Ltd.");
+  assert.equal(input.contactAddress, "1 Example Road, Singapore");
+  assert.equal(input.contactTaxId, "FOREIGN-TAX-123");
+  assert.equal(input.items[0].vatType, 3);
+  assert.match(input.items[0].description, /Qwen API Subscription/);
+  assert.equal(pp36.contactName, "Example Foreign AI Co., Ltd.");
+  assert.equal(pp36.contactTaxId, "FOREIGN-TAX-123");
+  assert.equal(pp36.total, 330);
+  assert.equal(pp36.vatValue, 23.10);
+});
+
+test("does not guess legal details for another AI provider", () => {
+  assert.throws(() => buildAiSubscriptionExpenseInput({
+    provider: "other",
+    providerName: "z.ai",
+    invoiceNumber: "INV",
+    receiptNumber: "REC",
+    paidOn: "2026-08-15",
+    subscriptionStart: "2026-08-15",
+    subscriptionEnd: "2026-09-15",
+    amountUsd: 10,
+    amountThb: 330,
+    conversionSource: "card_statement",
+    sellerHasNoThaiPermanentEstablishment: true,
+    expenseDebitCode: "53113",
+    expenseCreditCode: "21379.01",
+  }), /requires providerAddress, providerTaxId, serviceName/);
+});
+
+test("rejects incomplete or inconsistent BOT conversions", () => {
+  const base = {
+    provider: "openai",
+    invoiceNumber: "INV",
+    receiptNumber: "REC",
+    paidOn: "2026-06-07",
+    subscriptionStart: "2026-06-07",
+    subscriptionEnd: "2026-07-07",
+    amountUsd: 20,
+    amountThb: 653.32,
+    conversionSource: "bot_reference_rate",
+    sellerHasNoThaiPermanentEstablishment: true,
+    expenseDebitCode: "53113",
+    expenseCreditCode: "21379.01",
+  };
+  assert.throws(() => buildAiSubscriptionExpenseInput(base), /requires both exchangeRate/);
+  assert.throws(() => buildAiSubscriptionExpenseInput({
+    ...base,
+    exchangeRate: 32,
+    exchangeRateDate: "2026-06-05",
+  }), /does not match amountUsd x exchangeRate/);
+  assert.throws(() => buildAiSubscriptionExpenseInput({
+    ...base,
+    amountThb: 0,
+    exchangeRate: 0.01,
+    exchangeRateDate: "2026-06-05",
+  }), /greater than 0/);
 });
 
 test("does not create received VAT data for fully exempt documents", () => {

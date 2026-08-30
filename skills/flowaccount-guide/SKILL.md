@@ -13,7 +13,7 @@ description: >
 
 ## Overview
 
-FlowAccount is a Thai cloud accounting platform. This plugin provides 53 MCP tools
+FlowAccount is a Thai cloud accounting platform. This plugin provides MCP tools
 for managing the full accounting workflow: contacts, products, documents, expenses, and payments.
 
 ## Document Types
@@ -92,6 +92,24 @@ All line items accept a `vatType` number:
 ### Buy Documents
 - Purchase Orders: `list_purchase_orders`, `get_purchase_order`, `create_purchase_order`, `update_purchase_order`, `delete_purchase_order`
 - Expenses: `list_expenses`, `get_expense`, `create_expense`, `delete_expense`, `record_expense_payment`
+
+For any foreign AI subscription subject to Thai reverse-charge VAT—including
+OpenAI, Anthropic, z.ai, Qwen, and other providers—use
+`create_ai_subscription_expense`. Prefer the actual THB card-statement amount;
+otherwise supply the BOT USD reference rate and its publication date (the prior
+business day when necessary). The tool creates the expense at VAT 0 so the
+card payable equals the actual THB charge, then attaches PP.36 received-tax data with the
+taxable base in “มูลค่าที่จ่ายจริง”, defaults to accounts `53113` and
+`21379.01`, and requires confirmation that the seller has no Thai PE before it
+records no withholding tax.
+OpenAI and Anthropic use built-in profiles. For another provider, use
+`provider=other` and copy its legal name, address, tax/registration ID, and
+service description exactly from the invoice; never infer these from a brand.
+
+Before creating an expense, use `search_chart_of_accounts` or
+`get_account_by_code` to select debit and credit account codes. The server
+resolves IDs and category codes from a per-company SQLite cache. Never infer or
+reuse an account ID from a different company.
 
 ### Generic Payment
 - `record_payment` — works across document types: `tax-invoices`, `receipts`, `cash-invoices`, `expenses`

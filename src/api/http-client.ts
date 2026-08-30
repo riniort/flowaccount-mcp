@@ -39,7 +39,7 @@ export class FlowAccountHttpClient {
       const axiosErr = error as { response?: { status?: number; data?: unknown; headers?: unknown }; config?: { url?: string; baseURL?: string; method?: string } };
       if (axiosErr.response) {
         logger.error(`API Error ${axiosErr.response.status}: ${method} ${ep.base}${ep.path}`);
-        logger.error(`Response body: ${JSON.stringify(axiosErr.response.data)}`);
+        logSafeResponseMetadata(axiosErr.response.data);
       }
       if (axiosErr.response?.status === 401 && retryCount < 1) {
         // Use shared promise so concurrent requests don't trigger multiple re-auths
@@ -102,7 +102,7 @@ export class FlowAccountHttpClient {
       const axiosErr = error as { response?: { status?: number; data?: unknown } };
       if (axiosErr.response) {
         logger.error(`API Error ${axiosErr.response.status}: POST(file) ${ep.base}${ep.path}`);
-        logger.error(`Response body: ${JSON.stringify(axiosErr.response.data)}`);
+        logSafeResponseMetadata(axiosErr.response.data);
       }
       if (axiosErr.response?.status === 401) {
         if (!this.refreshPromise) {
@@ -128,5 +128,20 @@ export class FlowAccountHttpClient {
       }
       throw error;
     }
+  }
+}
+
+function logSafeResponseMetadata(data: unknown): void {
+  if (!data || typeof data !== "object") return;
+  const response = data as { code?: unknown; message?: unknown };
+  const metadata: Record<string, string | number | boolean> = {};
+  if (["string", "number", "boolean"].includes(typeof response.code)) {
+    metadata.code = response.code as string | number | boolean;
+  }
+  if (typeof response.message === "string") {
+    metadata.message = response.message.slice(0, 300);
+  }
+  if (Object.keys(metadata).length > 0) {
+    logger.error(`Response metadata: ${JSON.stringify(metadata)}`);
   }
 }

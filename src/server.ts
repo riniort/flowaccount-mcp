@@ -5,6 +5,9 @@ import { TokenManager } from "./auth/token-manager.js";
 import { FlowAccountHttpClient } from "./api/http-client.js";
 import { endpoints } from "./api/endpoints.js";
 import { z } from "zod";
+import { ChartAccountRepository } from "./chart-accounts/repository.js";
+import { ChartAccountService } from "./chart-accounts/service.js";
+import { FlowAccountChartAccountSource } from "./chart-accounts/flowaccount-source.js";
 
 // Tool registrations
 import { registerContactTools } from "./tools/contacts.js";
@@ -20,6 +23,7 @@ import { registerCashInvoiceTools } from "./tools/documents/cash-invoices.js";
 import { registerPurchaseOrderTools } from "./tools/documents/purchase-orders.js";
 import { registerAttachmentTools } from "./tools/attachments.js";
 import { registerDuplicateTools } from "./tools/duplicate.js";
+import { registerChartAccountTools } from "./tools/chart-accounts.js";
 
 export async function createServer(): Promise<McpServer> {
   const config = loadConfig();
@@ -31,6 +35,12 @@ export async function createServer(): Promise<McpServer> {
 
   // Create HTTP client
   const http = new FlowAccountHttpClient(tokenManager);
+  const chartAccountRepository = new ChartAccountRepository(config.chartCachePath);
+  const chartAccountService = new ChartAccountService(
+    chartAccountRepository,
+    new FlowAccountChartAccountSource(http, tokenManager),
+    config.chartCacheTtlMs
+  );
 
   type CompanyChoice = {
     code: string;
@@ -68,6 +78,14 @@ export async function createServer(): Promise<McpServer> {
           "ไม่ระบุชื่อบริษัท",
       }));
     activeCompany = `${tokenManager.getCompanySupportCode() || "Unknown code"} — ${companyName}`;
+    const verifiedCompanyCode = tokenManager.getCompanySupportCode();
+    if (verifiedCompanyCode) {
+      await chartAccountService.ensureChartCache({
+        companyCode: verifiedCompanyCode,
+        nameLocal: companyName,
+        lastVerifiedAt: new Date().toISOString(),
+      });
+    }
     return activeCompany;
   };
 
@@ -77,7 +95,7 @@ export async function createServer(): Promise<McpServer> {
   const server = new McpServer(
     {
       name: "flowaccount",
-      version: "1.0.0",
+      version: "1.3.0",
     },
     {
       instructions:
@@ -87,7 +105,9 @@ export async function createServer(): Promise<McpServer> {
         "Include both the company code and the full company name returned by that tool. " +
         "Do this once per new chat/session and repeat only if the " +
         "active company changes or the user asks. When creating an expense, " +
-        "always put the source document number in the required reference field.",
+        "always put the source document number in the required reference field. " +
+        "Resolve debit and credit account codes from the active company's chart cache; never guess or reuse account IDs across companies. " +
+        "For any foreign AI subscription subject to PP.36—including OpenAI, Anthropic, z.ai, Qwen, and other providers—prefer create_ai_subscription_expense and use the actual THB card-statement amount when available. For provider=other, require exact legal supplier details from the invoice and never infer them from the product brand.",
     }
   );
 
@@ -204,6 +224,11 @@ export async function createServer(): Promise<McpServer> {
         );
       }
       activeCompany = `${verifiedCode} — ${verifiedName}`;
+      await chartAccountService.refreshChartCache({
+        companyCode: verifiedCode,
+        nameLocal: verifiedName,
+        lastVerifiedAt: new Date().toISOString(),
+      });
       await refreshCompanyContext();
       return {
         content: [
@@ -219,7 +244,7 @@ export async function createServer(): Promise<McpServer> {
   // Register all tools
   registerContactTools(server, http, tokenManager);
   registerProductTools(server, http, tokenManager);
-  registerExpenseTools(server, http, tokenManager);
+  registerExpenseTools(server, http, tokenManager, chartAccountService);
   registerPaymentTools(server, http, tokenManager);
   registerBusinessInfoTools(server, http, tokenManager);
   registerQuotationTools(server, http, tokenManager);
@@ -230,6 +255,7 @@ export async function createServer(): Promise<McpServer> {
   registerPurchaseOrderTools(server, http, tokenManager);
   registerAttachmentTools(server, http, tokenManager);
   registerDuplicateTools(server, http, tokenManager);
+  registerChartAccountTools(server, chartAccountService, tokenManager);
 
   logger.info("All tools registered successfully");
 

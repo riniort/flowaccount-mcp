@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.2",
   "name": "flowaccount",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "display_name": "FlowAccount",
   "description": "MCP server for FlowAccount Thai accounting platform - จัดการเอกสารบัญชี ใบกำกับภาษี ใบเสร็จรับเงิน ใบเสนอราคา ค่าใช้จ่าย และอื่นๆ",
   "author": {
@@ -41,6 +41,10 @@
   "tools": [
     { "name": "get_active_company", "description": "Get the active FlowAccount company and available companies" },
     { "name": "change_active_company", "description": "Change and verify the active FlowAccount company" },
+    { "name": "get_account_by_code", "description": "Resolve a chart account code for the active company" },
+    { "name": "search_chart_of_accounts", "description": "Search chart accounts by code or name" },
+    { "name": "refresh_chart_of_accounts", "description": "Refresh the active company's chart-account cache" },
+    { "name": "get_chart_cache_status", "description": "Inspect the active company's chart-account cache" },
     { "name": "list_contacts", "description": "List all contacts with optional search" },
     { "name": "get_contact", "description": "Get a single contact by ID" },
     { "name": "create_contact", "description": "Create a new contact" },
@@ -90,6 +94,7 @@
     { "name": "list_expenses", "description": "List expense documents (ค่าใช้จ่าย)" },
     { "name": "get_expense", "description": "Get a single expense" },
     { "name": "create_expense", "description": "Create a new expense" },
+    { "name": "create_ai_subscription_expense", "description": "Create a VAT-0 foreign AI expense and attach PP.36 separately" },
     { "name": "create_expense_with_attachment", "description": "Create, verify, and attach a file to an expense atomically" },
     { "name": "update_expense", "description": "Update an awaiting expense" },
     { "name": "delete_expense", "description": "Delete an expense" },

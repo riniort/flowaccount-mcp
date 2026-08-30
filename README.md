@@ -65,6 +65,8 @@ Tokens are saved to `~/.flowaccount-mcp/tokens.json` and reused across sessions.
 | `FLOWACCOUNT_CREDENTIAL_TARGET` | `FlowAccountMCP` on Windows | Generic Windows Credential target used for automatic re-login; set empty to disable |
 | `FLOWACCOUNT_COMPANY_SUPPORT_CODE` | Previous token company | Company support code such as `N1234567` for automatic company selection |
 | `FLOWACCOUNT_IDLE_RECHECK_MS` | `900000` | Idle period before the next request rechecks authentication |
+| `FLOWACCOUNT_CHART_CACHE_PATH` | OS application-data directory | SQLite chart-of-accounts cache path |
+| `FLOWACCOUNT_CHART_CACHE_TTL_MS` | `86400000` | Chart cache TTL in milliseconds (24 hours) |
 
 On Windows, if the configured Generic Credential is missing, the MCP asks
 whether to open Credential Manager. Choosing **Yes** opens it and the MCP waits
@@ -88,6 +90,19 @@ For `create_expense`, the source document number is required in `reference`.
 The server sends it explicitly to FlowAccount's **เลขที่อ้างอิง** field and
 verifies that the create response contains the same value. Expense list output
 also includes `reference` to support duplicate checks.
+
+Expense account IDs and categories are resolved from the official FlowAccount
+Chart of Accounts API using the required debit and credit account codes. The
+SQLite cache is isolated by active company and stored outside the repository:
+
+- Windows: `%LOCALAPPDATA%\FlowAccountMCP\data\cache.sqlite`
+- macOS: `~/Library/Application Support/FlowAccountMCP/cache.sqlite`
+- Linux: `~/.local/share/flowaccount-mcp/cache.sqlite`
+
+Call `search_chart_of_accounts` to find a code. `create_expense` requires
+`expenseDebitCode` and `expenseCreditCode`; the corresponding IDs and category
+codes are optional and, when supplied, must match the active company's cache.
+The server refreshes stale data once and never guesses an account ID.
 
 Expense creation tools also expose `contactBranch` for the supplier branch
 number. It defaults to `00000` (head office), zero-pads numeric branches to
@@ -122,6 +137,10 @@ Add to your `claude_desktop_config.json`:
 |---|---|
 | `get_active_company` | Authenticate on demand and identify the active company |
 | `change_active_company` | Change and verify the active company |
+| `get_account_by_code` | Resolve an account code for the active company |
+| `search_chart_of_accounts` | Search account code or Thai/English name |
+| `refresh_chart_of_accounts` | Force an atomic full cache refresh |
+| `get_chart_cache_status` | Inspect cache freshness and sync errors |
 | `list_contacts` | List/search contacts |
 | `get_contact` | Get contact by ID |
 | `create_contact` | Create customer/supplier |
@@ -170,7 +189,8 @@ Add to your `claude_desktop_config.json`:
 | `list_expenses` | List expenses |
 | `list_expense_categories` | Discover accountant-mode debit/credit account pairs |
 | `get_expense` | Get expense by ID |
-| `create_expense` | Create and read-back verify an expense with duplicate-reference protection |
+| `create_expense` | Resolve account codes, then create and read-back verify an expense |
+| `create_ai_subscription_expense` | Create a foreign AI subscription at VAT 0 and attach PP.36 separately |
 | `create_expense_with_attachment` | Create, verify, and attach a file atomically |
 | `update_expense` | Update an awaiting expense |
 | `delete_expense` | Delete expense |
@@ -181,21 +201,49 @@ Add to your `claude_desktop_config.json`:
 | `get_business_info` | Get company info |
 | `get_bank_accounts` | List bank accounts |
 
-## Known FlowAccount UI bugs
+### Foreign AI subscriptions (OpenAI, Anthropic, z.ai, Qwen, and others)
 
-### Received tax-invoice VAT may appear as `0.00` on an expense
+Use `create_ai_subscription_expense` for any foreign AI SaaS receipt when the
+Thai VAT-registered buyer must self-assess VAT on form PP.36. The tool:
 
-The expanded **received tax invoice** table on an expense, and the
-`supplierInvoices[].vatValue` field returned by the expense-detail projection,
-may show `0.00` even when FlowAccount has recorded the input VAT correctly in
-the purchase-tax summary.
+- uses the provider receipt number as FlowAccount `reference`;
+- uses the provider invoice number as the received tax-invoice number;
+- defaults to debit account `53113` and credit account `21379.01`;
+- records the supplier expense as no VAT so its total and card payable equal
+  `amountThb`, then attaches a separate PP.36 record whose taxable base is
+  `amountThb` and whose self-assessed VAT is 7%;
+- prefers the actual THB card-statement amount, but accepts a BOT reference
+  rate with its publication date when the statement is unavailable;
+- supports an optional receipt attachment without deleting an already-created
+  expense if only the upload fails; and
+- requires explicit confirmation that the seller has no Thai permanent
+  establishment before recording zero withholding tax.
 
-- Use the purchase-tax summary and the expense-level `vatableAmount`,
-  `vatValue`, and `total` as the authoritative amounts.
-- Do not delete, re-attach, or update a received tax invoice solely because the
-  expense-detail UI or projection shows VAT `0.00`.
-- The MCP intentionally verifies the received tax-invoice identity from the
-  expense detail without treating its projected `vatValue` as authoritative.
+OpenAI and Anthropic have built-in supplier profiles. For z.ai, Qwen, or any
+other provider, set `provider` to `other` and supply `providerName`,
+`providerAddress`, `providerTaxId`, and `serviceName` exactly from the invoice.
+Product branding alone is not enough to identify the invoicing legal entity,
+so the MCP rejects incomplete custom-provider profiles instead of guessing.
+
+When the payment date is a weekend or another non-publication day, obtain the
+BOT rate for the prior business day and pass that date in `exchangeRateDate`.
+The tool verifies that `amountUsd * exchangeRate`, rounded half-up to two
+decimals, equals `amountThb`.
+
+## PP.36 accounting boundary
+
+### The supplier expense correctly shows VAT `0.00`
+
+The foreign supplier does not charge Thai VAT on these qualifying B2B receipts. The
+supplier expense therefore remains VAT 0 and its payable equals the actual THB
+card charge. The tool creates the 7% self-assessment independently as a PP.36
+received-tax record.
+
+- Reconcile the expense total—not expense plus PP.36 VAT—to the card statement.
+- Use the PP.36 record and the Revenue Department receipt after remittance for
+  the input-tax workflow; do not expect input VAT on the supplier expense.
+- The tool verifies the separately attached PP.36 base, VAT, invoice number,
+  and tax-form response before reporting success.
 
 ## Project Structure
 

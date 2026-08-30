@@ -9,6 +9,7 @@ export const BASE = {
   CORE: "https://api-core-canary.flowaccount.com/api",
   BIZ: "https://business-api.flowaccount.com",
   PROFILE: "https://profile.flowaccount.com",
+  OPENAPI: "https://openapi.flowaccount.com/v1",
 } as const;
 
 // Each endpoint returns { baseUrl, path } so the HTTP client knows which host to call
@@ -16,6 +17,9 @@ type Ep = { base: string; path: string };
 const ep = (base: string, path: string): Ep => ({ base, path });
 
 export const endpoints = {
+  chartOfAccounts: {
+    list: () => ep(BASE.OPENAPI, "/chart-of-accounts/accounts"),
+  },
   // === SELL DOCUMENTS (api-core-canary) ===
   quotations: {
     list:         (c: string)             => ep(BASE.CORE, `/${c}/quotations`),
